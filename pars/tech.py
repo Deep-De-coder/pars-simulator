@@ -1,5 +1,5 @@
 class TechTree:
-    def __init__(self):
+    def __init__(self, cost_mult=1.0):
         self.research_points = 0
         self.projects = {
             "Underground Reinforcement": {
@@ -58,6 +58,10 @@ class TechTree:
             }
         }
         self.current_project = None
+        if cost_mult != 1.0:
+            for p in self.projects.values():
+                p["research_cost"] = int(round(p["research_cost"] * cost_mult))
+                p["cost"] = int(round(p["cost"] * cost_mult))
 
     def unlock_project(self, name):
         """Unlock a project for construction using accumulated research points."""

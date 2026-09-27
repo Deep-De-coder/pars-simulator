@@ -8,13 +8,14 @@ from pars.environment import Grid3D
 from pars.survivor import Survivor, reset_ids
 from pars.coordinator import CoordinatorAgent
 from pars.tech import TechTree
+from pars.config import get_difficulty
 
 MAX_POPULATION = 30
 
 
 class Simulation:
     def __init__(self, width=5, height=5, starting_population=6, seed=None,
-                 renderer=None):
+                 renderer=None, difficulty=None):
         if width < 3 or height < 3:
             raise ValueError("Grid must be at least 3x3")
         if starting_population < 1:
@@ -22,6 +23,9 @@ class Simulation:
         if seed is not None:
             random.seed(seed)
         reset_ids()
+
+        self.difficulty = get_difficulty(difficulty)
+        self.seed = seed
 
         # renderer(sim) is called once per turn; None runs headless.
         self.renderer = renderer
@@ -33,11 +37,13 @@ class Simulation:
         self.running = True
         self.game_over_reason = None
 
-        self.grid = Grid3D(width=width, height=height, z_levels=[-1, 0, 1])
-        self.tech_tree = TechTree()
+        self.grid = Grid3D(width=width, height=height, z_levels=[-1, 0, 1],
+                           difficulty=self.difficulty)
+        self.tech_tree = TechTree(cost_mult=self.difficulty.tech_cost)
         self.coordinator = CoordinatorAgent(self.grid, self.tech_tree)
 
-        self.stockpile = {"scrap": 0, "water": 30, "biomass": 30}
+        start = self.difficulty.starting_stock
+        self.stockpile = {"scrap": 0, "water": start, "biomass": start}
 
         # Lifetime counters for the end-of-run report.
         self.stats = {"births": 0, "deaths": 0, "recruits": 0,

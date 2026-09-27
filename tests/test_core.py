@@ -162,3 +162,37 @@ def test_names_reproducible_across_runs():
     a = [s.name for s in Simulation(seed=9).survivors]
     b = [s.name for s in Simulation(seed=9).survivors]
     assert a == b
+
+
+def test_difficulty_presets_change_costs_and_stock():
+    easy = Simulation(seed=1, difficulty="easy")
+    hard = Simulation(seed=1, difficulty="hard")
+    name = "Sub-space Radio Beacon"
+    assert easy.tech_tree.projects[name]["cost"] < hard.tech_tree.projects[name]["cost"]
+    assert easy.stockpile["water"] > hard.stockpile["water"]
+
+
+def test_escalation_grows_over_time():
+    grid = Grid3D(3, 3)
+    start = grid.escalation
+    for _ in range(100):
+        grid.tick()
+    assert grid.escalation > start
+
+
+def test_old_age_eventually_kills():
+    s = Survivor()
+    s.lifespan = 20
+    for _ in range(60):
+        if not s.alive:
+            break
+        s.hunger = 0
+        s.tick(calm_cell())
+    assert s.cause_of_death == "Old age"
+
+
+def test_batch_summary():
+    from pars.batch import run_one, summarise
+    results = [run_one(seed, max_turns=40) for seed in range(3)]
+    s = summarise(results)
+    assert s["runs"] == 3 and sum(s["outcomes"].values()) == 3

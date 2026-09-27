@@ -79,7 +79,12 @@ class CoordinatorAgent:
         """Estimated HP loss per turn for survivor s standing on level z."""
         c = levels[z]
         rad = c["radiation"] * (1 - protections.get("radiation", 0)) - s.genes["rad_resistance"] * 12
-        danger = max(0.0, rad) * 0.5 * 0.3 * 3  # accumulates, so weight it up
+        # Radiation accumulates: project the dose over a few turns, and for
+        # already-irradiated survivors value levels where it flushes out.
+        future_rad = s.radiation + (rad * 0.5 if rad > 0 else -3.0) * 4
+        danger = max(0.0, future_rad - 30.0) * 0.3
+        if s.radiation > 20 and rad > 0:
+            danger += 2.0
         temp = c["temperature"] + protections.get("cold", 0)
         danger += max(0.0, (10 - temp) - s.genes["cold_resistance"] * 10) * 0.4
         tox = c["toxicity"] * ((1 - protections.get("radon", 0)) if z == -1 else 1)

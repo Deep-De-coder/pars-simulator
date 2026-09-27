@@ -6,6 +6,7 @@ PARS - Post-disaster Evolutionary Survival Coordinator
 import argparse
 import sys
 
+from pars.config import DIFFICULTIES, DEFAULT_DIFFICULTY
 from pars.simulation import Simulation
 
 
@@ -20,6 +21,8 @@ def parse_args(argv=None):
     p.add_argument("--seed", type=int, default=None, help="Random seed")
     p.add_argument("--delay", type=int, default=500, help="Turn delay in ms")
     p.add_argument("--max-turns", type=int, default=0, help="Max turns (0=unlimited)")
+    p.add_argument("--difficulty", choices=list(DIFFICULTIES), default=DEFAULT_DIFFICULTY,
+                   help="Disaster frequency/intensity, regrowth and tech cost preset")
     p.add_argument("--headless", action="store_true",
                    help="Skip the dashboard; print a status line every --report-every turns")
     p.add_argument("--report-every", type=int, default=10,
@@ -60,11 +63,13 @@ def main(argv=None):
     print(f"Survivors: {args.population}")
     print(f"Seed: {seed_str}")
     print(f"Max turns: {turns_str}")
+    print(f"Difficulty: {args.difficulty}")
     print("=" * 60)
     print()
 
     sim_kwargs = dict(width=args.width, height=args.height,
-                      starting_population=args.population, seed=args.seed)
+                      starting_population=args.population, seed=args.seed,
+                      difficulty=args.difficulty)
 
     if args.headless:
         sim = Simulation(renderer=headless_reporter(args.report_every), **sim_kwargs)

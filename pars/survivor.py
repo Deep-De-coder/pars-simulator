@@ -46,6 +46,7 @@ class Survivor:
 
         # State
         self.age = 0
+        self.lifespan = random.randint(90, 140)
         self.role = "Unassigned"
         self.forage_target = "supplies"  # "supplies" (water/biomass) or "scrap"
         self.status = "Idle"
@@ -99,7 +100,7 @@ class Survivor:
         if absorbed > 0:
             self.radiation = min(100.0, self.radiation + absorbed * 0.5)
         else:
-            self.radiation = max(0.0, self.radiation - 2.0)
+            self.radiation = max(0.0, self.radiation - 3.0)
 
         if self.radiation > 30.0:
             self._hurt((self.radiation - 30.0) * 0.3, "Radiation")
@@ -129,6 +130,13 @@ class Survivor:
         if self.z == -1 and risk > 0 and random.random() < risk / 400.0:
             self._hurt(random.uniform(15, 40), "Cave-in")
             self.status = "Crushed"
+
+        # Old age: frailty sets in over the last quarter of the lifespan.
+        frail_from = self.lifespan * 0.75
+        if self.age > frail_from:
+            self._hurt((self.age - frail_from) / (self.lifespan * 0.25) * 6.0, "Old age")
+            if self.status == "Idle":
+                self.status = "Frail"
 
         # Slow passive healing if healthy, fed, and rested.
         if (self.hunger < 40.0 and self.radiation < 15.0 and self.energy > 50.0
@@ -202,7 +210,7 @@ class Survivor:
 
         elif action_type == "Rest":
             self.energy = min(100.0, self.energy + 25.0)
-            self.radiation = max(0.0, self.radiation - 1.0)
+            self.radiation = max(0.0, self.radiation - 2.0)
             if self.status == "Idle":
                 self.status = "Resting"
 
