@@ -237,3 +237,70 @@ def test_main_headless_exports(tmp_path):
                       "--report-every", "0", "--export", str(out)])
     assert code == 0
     assert json.loads(out.read_text())["turns"] == 25
+
+
+def test_player_orders():
+    sim = Simulation(seed=8)
+    sim.set_focus("shelter")
+    sim.tick()
+    assert sim.coordinator.active_plan.startswith("ORDER: shelter")
+    sim.set_focus("auto")
+    sim.evacuate(0, turns=3)
+    sim.evacuate(1, turns=3)
+    with pytest.raises(ValueError):
+        sim.evacuate(-1, turns=3)  # at least one level must stay open
+    for _ in range(4):
+        sim.tick()
+    assert 0 not in sim.coordinator.forbidden  # order expired
+    target = sim.alive[0]
+    sim.pin_role(target.id, "Research")
+    sim.tick()
+    if target.alive and not target.role.startswith("Move"):
+        assert target.role == "Research"
+    sim.pin_role(target.id, None)
+    sim.set_doctrine("cautious")
+    assert sim.coordinator.doctrine.name == "cautious"
+    with pytest.raises(ValueError):
+        sim.set_focus("party")
+
+
+def test_evacuated_level_is_emptied():
+    sim = Simulation(seed=12, starting_population=10)
+    sim.evacuate(0, turns=8)
+    for _ in range(6):
+        sim.tick()
+    assert all(s.z != 0 for s in sim.alive)
+
+
+def test_web_server_api():
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from pars.web.server import Game, make_handler
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Game(seed=3)))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def post(path, body):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        return json.load(urllib.request.urlopen(req))
+
+    try:
+        assert b"PARS Command" in urllib.request.urlopen(base + "/").read()
+        assert len(urllib.request.urlopen(base + "/vendor/three.min.js").read()) > 100_000
+        state = post("/api/step", {"n": 5})
+        assert state["turn"] == 5 and len(state["cells"]) == 75
+        state = post("/api/command", {"type": "focus", "focus": "build"})
+        assert state["focus"] == "build"
+        state = post("/api/new", {"seed": 4, "difficulty": "hard"})
+        assert state["turn"] == 0 and state["settings"]["difficulty"] == "hard"
+        try:
+            post("/api/command", {"type": "nope"})
+            assert False, "expected HTTP 400"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+    finally:
+        server.shutdown()

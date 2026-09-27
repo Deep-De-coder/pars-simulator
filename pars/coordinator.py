@@ -17,6 +17,17 @@ from pars.config import get_doctrine
 
 LOG_LIMIT = 200
 
+# Player orders that bias the coordinator (see Simulation.set_focus).
+FOCUSES = {
+    "auto": "Coordinator decides",
+    "forage": "Everyone free gathers food and water",
+    "build": "Max builders; spare hands salvage scrap",
+    "research": "Minimal foraging; everyone else researches",
+    "shelter": "Move to the safest level and rest",
+}
+PINNABLE_ROLES = ("Forage", "Research", "Construct", "Rest")
+FORBIDDEN_PENALTY = 50.0
+
 # Which levels each disaster makes worse (used for forecast look-ahead).
 DISASTER_THREAT = {
     "Acid Rain": {0: 8.0, 1: 3.0},
@@ -37,6 +48,10 @@ class CoordinatorAgent:
         self.plan_age = 0
         self.turn = 0
         self._last_plan = None
+        # Player orders.
+        self.focus = "auto"
+        self.forbidden = {}   # z -> turns remaining
+        self.pins = {}        # survivor id -> role
 
     def log(self, msg):
         self.thought_log.append(f"T{self.turn:<3} {msg}")
@@ -96,12 +111,19 @@ class CoordinatorAgent:
             danger += c["cave_in_risk"] * (1 - protections.get("cave_in", 0)) / 400 * 27
         if lookahead and self.grid.current_disaster == "None" and self.grid.disaster_forecast:
             danger += DISASTER_THREAT.get(self.grid.disaster_forecast[0], {}).get(z, 0.0)
+        if z in self.forbidden:
+            danger += FORBIDDEN_PENALTY
         return danger
 
     # --------------------------------------------------------------- planning
     def formulate_plan(self, survivors, intel, stockpile):
         """Decide the colony's strategic priority for this turn."""
         self.turn += 1
+        for z in list(self.forbidden):
+            self.forbidden[z] -= 1
+            if self.forbidden[z] <= 0:
+                del self.forbidden[z]
+                self.log(f"\U0001f7e2 Evacuation order for Z={z} expired.")
 
         unlocked = self.tech_tree.try_unlock_next()
         if unlocked:
@@ -136,6 +158,12 @@ class CoordinatorAgent:
             self.active_plan = (f"Research toward {target}." if target
                                 else "Stockpile and maintain.")
 
+        if self.focus == "shelter":
+            plan = "SHELTER"
+            self.active_plan = "ORDER: shelter on the safest level and rest."
+        elif self.focus != "auto":
+            self.active_plan += f" [Order: {self.focus}]"
+
         if plan != self._last_plan:
             self.log(f"\U0001f9e0 Plan: {self.active_plan}")
             self.plan_age = 0
@@ -165,10 +193,17 @@ class CoordinatorAgent:
             best_z = min(levels, key=lambda z: self.danger_for(s, z, levels, prot))
             best = self.danger_for(s, best_z, levels, prot)
             doc = self.doctrine
-            if best_z != s.z and here - best >= doc.move_threshold and s.energy > 15:
+            threshold = 0.3 if plan == "SHELTER" else doc.move_threshold
+            # Leaving a level the player evacuated overrides the energy check.
+            must_leave = s.z in self.forbidden and best_z not in self.forbidden
+            if best_z != s.z and here - best >= threshold and (s.energy > 15 or must_leave):
                 s.role = f"Move To Z={best_z}"
                 moved += 1
-            elif s.health < 30 or s.energy < doc.rest_energy or (plan == "HEALTH_FOCUS" and s.radiation > 30):
+            elif s.id in self.pins:
+                s.role = self.pins[s.id]
+                s.forage_target = "supplies"
+            elif (plan == "SHELTER" or s.health < 30 or s.energy < doc.rest_energy
+                  or (plan == "HEALTH_FOCUS" and s.radiation > 30)):
                 s.role = "Rest"
             else:
                 free.append(s)
@@ -181,8 +216,10 @@ class CoordinatorAgent:
         # 2. How many of each job do we need?
         n_alive = len(alive)
         stock = min(stockpile.get("water", 0), stockpile.get("biomass", 0))
-        if plan in ("FORAGE_PRIORITY", "SURVIVAL", "DISASTER_RESPONSE"):
+        if plan in ("FORAGE_PRIORITY", "SURVIVAL", "DISASTER_RESPONSE") or self.focus == "forage":
             foragers = len(free)
+        elif self.focus == "research":
+            foragers = 1 if stock > n_alive * 2 else max(1, len(free) // 3)
         else:
             # Staff foragers in proportion to how far supplies are below the
             # doctrine's target buffer (a baseline crew always forages).
@@ -195,6 +232,11 @@ class CoordinatorAgent:
         if self.tech_tree.current_project and stockpile.get("scrap", 0) > 0:
             builders = max(1, min(self.doctrine.max_builders, stockpile["scrap"] // 8))
             if plan in ("FORAGE_PRIORITY", "SURVIVAL"):
+                builders = 0
+            if self.focus == "build":
+                builders = self.doctrine.max_builders + 2
+                foragers = min(foragers, max(1, len(free) // 4))
+            elif self.focus == "research":
                 builders = 0
         remaining = len(free) - foragers
         builders = min(builders, remaining)
@@ -228,8 +270,11 @@ class CoordinatorAgent:
         for s in pool[builders:]:
             # Scrap is the bottleneck for building: send spare hands to salvage
             # if we have a project waiting on it, otherwise research.
-            if (self.tech_tree.current_project
-                    and stockpile.get("scrap", 0) < self.doctrine.salvage_below):
+            if self.focus == "research" and self.tech_tree.next_research_target():
+                s.role = "Research"
+            elif (self.tech_tree.current_project
+                    and (self.focus == "build"
+                         or stockpile.get("scrap", 0) < self.doctrine.salvage_below)):
                 s.role = "Forage"
                 s.forage_target = "scrap"
             elif self.tech_tree.next_research_target() is None and not self.tech_tree.current_project:

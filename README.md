@@ -19,13 +19,36 @@ git clone https://github.com/Deep-De-coder/pars-simulator.git
 cd pars-simulator
 pip install -r requirements.txt
 
-python main.py                                   # live dashboard, normal difficulty
+python -m pars.web                               # interactive 3D view in your browser
+python main.py                                   # terminal dashboard, normal difficulty
 python main.py --seed 42 --doctrine cautious --difficulty hard
 python main.py --headless --seed 7               # no dashboard, status line every 10 turns
 python -m pars.batch --runs 100 --difficulty all --doctrine all   # compare strategies
 ```
 
 Python 3.9+. The only runtime dependency is `rich` (used only by the live dashboard).
+
+## Interactive 3D mode
+
+```bash
+python -m pars.web                 # opens http://127.0.0.1:8765
+python -m pars.web --seed 42 --difficulty hard --port 9000 --no-browser
+```
+
+![PARS 3D view](docs/web-3d.png)
+
+The three levels are drawn as stacked slabs you can orbit (drag) and zoom (scroll). Everything runs locally: a small standard-library server runs the same Python simulation, and three.js is bundled in the repo, so no internet is needed.
+
+- **Play, pause, step** (Space / `.`), choose a speed, or start a new colony with any seed, difficulty, doctrine and grid size.
+- **Overlays**: resources, radiation, toxicity, temperature or cave-in risk. **Show** isolates one level when the others are in the way.
+- **Click a survivor** to see their vitals and genes and **pin their job** (Forage, Research, Construct, Rest). Click a tile to see what's on it.
+- **Orders** change what the coordinator does:
+  - **Focus**: `auto` (coordinator decides), `forage`, `build`, `research` or `shelter`.
+  - **Evacuate** a level for 6 turns. Survivors leave it and stay out. At least one level must stay open.
+  - **Doctrine** can be switched mid-game.
+- Disasters show as particles on the levels they hit. Your orders appear in the coordinator log.
+
+Pinned survivors still flee danger, and the orders are the same commands the Python API exposes (`Simulation.set_focus`, `evacuate`, `pin_role`, `set_doctrine`).
 
 ## How a turn works
 
@@ -136,7 +159,8 @@ pars-simulator/
 │   ├── simulation.py    # Turn loop, stats, history, export
 │   ├── report.py        # End-of-run report and score
 │   ├── batch.py         # Multi-seed analysis CLI
-│   └── dashboard.py     # Rich live dashboard
+│   ├── dashboard.py     # Rich live terminal dashboard
+│   └── web/             # Interactive 3D browser mode (server + three.js page)
 └── tests/               # pytest suite
 ```
 

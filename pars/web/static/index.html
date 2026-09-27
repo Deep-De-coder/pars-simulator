@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PARS Command</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --ground: #0e1316;
+    --panel: #151d21;
+    --panel-2: #1b252a;
+    --line: #26343a;
+    --ink: #dce4e5;
+    --muted: #8397a0;
+    --accent: #e3a33b;      /* sodium-lamp amber: hazard signage */
+    --accent-ink: #1a1206;
+    --good: #5fb878;
+    --warn: #e3a33b;
+    --bad: #e0574f;
+    --radon: #a77bd6;
+    --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+    --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font: 14px/1.45 var(--body);
+    display: grid; grid-template-rows: auto 1fr; overflow: hidden;
+  }
+  button, select, input { font: inherit; color: inherit; }
+  button {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+    padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  select, input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---------- top bar ---------- */
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+    padding: 10px 16px; padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .brand { font-family: var(--display); font-weight: 700; letter-spacing: .08em; font-size: 18px; }
+  .brand small { font-weight: 500; color: var(--muted); letter-spacing: .04em; font-size: 12px; margin-left: 6px; }
+  .turn { font-family: var(--display); font-size: 16px; }
+  .turn b { color: var(--accent); }
+  .weather { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--line); font-size: 12px; white-space: nowrap;
+  }
+  .chip.alert { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+  .chip.calm { color: var(--muted); }
+  .forecast { color: var(--muted); font-size: 12px; }
+  .transport { display: flex; gap: 6px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+
+  /* ---------- main ---------- */
+  main { display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
+  #stage { position: relative; min-height: 0; }
+  #scene { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  #scene:active { cursor: grabbing; }
+  .overlay-bar {
+    position: absolute; left: 12px; top: 12px; display: flex; gap: 4px; flex-wrap: wrap;
+    background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px; border-radius: 6px; border: 1px solid var(--line);
+  }
+  .overlay-bar span { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); align-self: center; padding: 0 4px; }
+  .overlay-bar button { padding: 4px 8px; font-size: 12px; }
+  .legend {
+    position: absolute; left: 12px; bottom: 12px; font-size: 12px; color: var(--muted);
+    background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line);
+    display: grid; gap: 4px; max-width: calc(100% - 24px);
+  }
+  .legend .ramp { height: 8px; border-radius: 2px; width: 180px; max-width: 100%; }
+  .hint { position: absolute; right: 12px; bottom: 12px; font-size: 11px; color: var(--muted); text-align: right; }
+  .banner {
+    position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  }
+  .banner div {
+    pointer-events: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 18px 22px; max-width: min(560px, calc(100% - 32px));
+  }
+  .banner h2 { font-family: var(--display); margin: 0 0 8px; letter-spacing: .06em; }
+  .banner pre { font: 12px/1.5 var(--mono); white-space: pre-wrap; color: var(--muted); margin: 0 0 12px; max-height: 40vh; overflow: auto; }
+
+  /* ---------- side panel ---------- */
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; min-height: 0; }
+  section { padding: 14px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+  h3 {
+    margin: 0; font-family: var(--display); font-weight: 500; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  h3 em { font-style: normal; font-family: var(--body); letter-spacing: 0; text-transform: none; color: var(--ink); font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat { background: var(--panel-2); border-radius: 4px; padding: 6px 8px; }
+  .stat label { display: block; font-size: 11px; color: var(--muted); }
+  .stat .num { font-size: 16px; }
+  .bars { display: grid; gap: 6px; }
+  .bar { display: grid; grid-template-columns: 74px 1fr 36px; gap: 8px; align-items: center; font-size: 12px; }
+  .bar .track { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 3px; }
+  .bar .num { text-align: right; color: var(--muted); }
+  .plan { font-size: 13px; padding: 8px 10px; background: var(--panel-2); border-left: 3px solid var(--accent); border-radius: 2px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .focus-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+  .focus-grid button { text-align: left; }
+  .focus-grid small { display: block; font-size: 11px; opacity: .75; font-weight: 400; }
+  .levels { display: grid; gap: 6px; }
+  .level { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 6px 8px; background: var(--panel-2); border-radius: 4px; font-size: 13px; }
+  .level .meta { color: var(--muted); font-size: 11px; }
+  .level.forbidden { outline: 1px dashed var(--bad); }
+  .muted { color: var(--muted); }
+  .survivor-card { display: grid; gap: 8px; }
+  .genes { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; font-size: 11px; text-align: center; }
+  .genes div { background: var(--panel-2); border-radius: 3px; padding: 4px 2px; }
+  .genes b { display: block; font: 500 13px var(--mono); }
+  .tech { display: grid; gap: 6px; }
+  .tech-item { display: grid; gap: 3px; font-size: 12px; }
+  .tech-item .head { display: flex; justify-content: space-between; gap: 8px; }
+  .tech-item .state { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .tech-item.done .state { color: var(--good); }
+  .tech-item.building .state { color: var(--accent); }
+  .log { font: 12px/1.5 var(--mono); color: var(--muted); max-height: 220px; overflow-y: auto; display: grid; gap: 2px; }
+  .log div:last-child { color: var(--ink); }
+  .log .order { color: var(--accent); }
+  canvas.spark { width: 100%; height: 44px; display: block; }
+  dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 18px; width: min(420px, calc(100% - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  dialog form { display: grid; gap: 10px; }
+  dialog label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  .err { color: var(--bad); font-size: 12px; min-height: 1em; }
+
+  @media (max-width: 900px) {
+    body { overflow: auto; grid-template-rows: auto auto; }
+    main { grid-template-columns: 1fr; }
+    #stage { height: 72vh; }
+    .hint { display: none; }
+    .overlay-bar { left: 8px; right: 8px; top: 8px; padding: 4px; gap: 3px; }
+    .overlay-bar button { padding: 3px 6px; font-size: 11px; }
+    .legend { left: 8px; bottom: 8px; font-size: 11px; padding: 6px 8px; }
+    aside { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+    .transport { margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">PARS<small>Colony Command</small></div>
+  <div class="turn">Turn <b id="turn" class="num">0</b></div>
+  <div class="weather">
+    <span id="disaster" class="chip calm">Calm</span>
+    <span id="forecast" class="forecast"></span>
+  </div>
+  <div class="transport">
+    <button id="play" title="Play / pause (Space)">▶ Play</button>
+    <button id="step" title="Advance one turn (.)">Step</button>
+    <button id="step10" title="Advance ten turns">+10</button>
+    <select id="speed" aria-label="Playback speed">
+      <option value="900">Slow</option>
+      <option value="400" selected>Normal</option>
+      <option value="150">Fast</option>
+      <option value="40">Very fast</option>
+    </select>
+    <button id="newgame">New game</button>
+  </div>
+</header>
+
+<main>
+  <div id="stage">
+    <canvas id="scene" aria-label="3D view of the colony: underground, surface and mountain levels"></canvas>
+    <div class="overlay-bar" role="group" aria-label="Map overlay">
+      <span>Overlay</span>
+      <button data-overlay="terrain" class="on">Resources</button>
+      <button data-overlay="radiation">Radiation</button>
+      <button data-overlay="toxicity">Toxicity</button>
+      <button data-overlay="temperature">Temperature</button>
+      <button data-overlay="cave_in_risk">Cave-in</button>
+      <span>Show</span>
+      <button data-level="all" class="on">All</button>
+      <button data-level="1">Mountains</button>
+      <button data-level="0">Surface</button>
+      <button data-level="-1">Underground</button>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="hint">Drag to orbit · scroll to zoom · click a survivor or tile</div>
+    <div class="banner" id="banner" hidden><div>
+      <h2 id="banner-title"></h2>
+      <pre id="banner-report"></pre>
+      <div class="row"><button id="banner-new" class="on">New game</button><button id="banner-close">View colony</button></div>
+    </div></div>
+  </div>
+
+  <aside>
+    <section>
+      <h3>Colony <em id="settings"></em></h3>
+      <div class="stats">
+        <div class="stat"><label>Alive</label><span class="num" id="s-alive">0</span></div>
+        <div class="stat"><label>Tech</label><span class="num" id="s-tech">0/6</span></div>
+        <div class="stat"><label>Score</label><span class="num" id="s-score">0</span></div>
+        <div class="stat"><label>Water</label><span class="num" id="s-water">0</span></div>
+        <div class="stat"><label>Biomass</label><span class="num" id="s-biomass">0</span></div>
+        <div class="stat"><label>Scrap</label><span class="num" id="s-scrap">0</span></div>
+      </div>
+      <div class="bars" id="vitals"></div>
+      <canvas class="spark" id="spark" aria-label="Population over time"></canvas>
+      <div class="plan" id="plan">Initializing…</div>
+    </section>
+
+    <section>
+      <h3>Orders <em id="focus-label"></em></h3>
+      <div class="focus-grid" id="focus"></div>
+      <div class="row">
+        <label class="muted" for="doctrine" style="font-size:12px">Doctrine</label>
+        <select id="doctrine"></select>
+      </div>
+    </section>
+
+    <section>
+      <h3>Levels <em>evacuate to clear a level for 6 turns</em></h3>
+      <div class="levels" id="levels"></div>
+    </section>
+
+    <section id="inspect">
+      <h3>Selected</h3>
+      <div id="inspect-body" class="muted">Click a survivor or a tile in the 3D view.</div>
+    </section>
+
+    <section>
+      <h3>Tech tree <em id="rp"></em></h3>
+      <div class="tech" id="tech"></div>
+    </section>
+
+    <section>
+      <h3>Coordinator log</h3>
+      <div class="log" id="log"></div>
+    </section>
+  </aside>
+</main>
+
+<dialog id="newdlg">
+  <form method="dialog" id="newform">
+    <h3>New colony</h3>
+    <label>Difficulty <select name="difficulty" id="nd-difficulty"></select></label>
+    <label>Doctrine <select name="doctrine" id="nd-doctrine"></select></label>
+    <div class="row">
+      <label style="flex:1">Seed (blank = random) <input name="seed" id="nd-seed" inputmode="numeric" placeholder="random"></label>
+      <label style="width:90px">Survivors <input name="population" id="nd-pop" type="number" min="1" max="20" value="6"></label>
+    </div>
+    <div class="row">
+      <label style="flex:1">Width <input name="width" id="nd-w" type="number" min="3" max="10" value="5"></label>
+      <label style="flex:1">Height <input name="height" id="nd-h" type="number" min="3" max="10" value="5"></label>
+    </div>
+    <div class="err" id="nd-err"></div>
+    <div class="row"><button value="ok" class="on" id="nd-go">Start</button><button value="cancel" formnovalidate>Cancel</button></div>
+  </form>
+</dialog>
+
+<script src="/vendor/three.min.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const LEVEL_NAME = { "-1": "Underground", "0": "Surface", "1": "Mountains" };
+const LEVEL_BASE = { "-1": 0x5b4a3f, "0": 0x5d6b3a, "1": 0x7f8f98 };
+const LAYER_GAP = 4;
+let focusLevel = null;   // null = show all levels, else z to isolate
+
+let state = null;
+let overlay = "terrain";
+let playing = false;
+let timer = null;
+let busy = false;
+let selected = null;   // {kind:'survivor', id} | {kind:'cell', x,y,z}
+let bannerDismissedTurn = -1;
+
+// ------------------------------------------------------------------ API
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+// ------------------------------------------------------------------ 3D scene
+const canvas = $("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e1316);
+scene.fog = new THREE.Fog(0x0e1316, 28, 60);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+scene.add(new THREE.HemisphereLight(0xcfe3ea, 0x1a1410, 0.5));
+const sun = new THREE.DirectionalLight(0xffffff, 0.55);
+sun.position.set(8, 20, 10);
+scene.add(sun);
+const flareLight = new THREE.PointLight(0xff5533, 0, 40);
+flareLight.position.set(0, 12, 0);
+scene.add(flareLight);
+
+const world = new THREE.Group();
+scene.add(world);
+const tileGroup = new THREE.Group();
+const survivorGroup = new THREE.Group();
+const decorGroup = new THREE.Group();
+world.add(tileGroup, survivorGroup, decorGroup);
+
+const tiles = new Map();        // "x,y,z" -> mesh
+const survivorMeshes = new Map(); // id -> mesh
+let gridW = 0, gridH = 0;
+
+// Simple orbit camera (drag / wheel / touch), no extra library.
+const orbit = { theta: 0.75, phi: 1.05, radius: 20, target: new THREE.Vector3(0, 0, 0) };
+function placeCamera() {
+  const { theta, phi, radius, target } = orbit;
+  camera.position.set(
+    target.x + radius * Math.sin(phi) * Math.sin(theta),
+    target.y + radius * Math.cos(phi),
+    target.z + radius * Math.sin(phi) * Math.cos(theta));
+  camera.lookAt(target);
+}
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => {
+  drag = { x: e.clientX, y: e.clientY, moved: 0 };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
+  drag.x = e.clientX; drag.y = e.clientY;
+  orbit.theta -= dx * 0.008;
+  orbit.phi = Math.min(1.5, Math.max(0.2, orbit.phi - dy * 0.006));
+  placeCamera();
+});
+canvas.addEventListener("pointerup", (e) => {
+  if (drag && drag.moved < 6) pick(e);
+  drag = null;
+});
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  orbit.radius = Math.min(45, Math.max(7, orbit.radius * (1 + Math.sign(e.deltaY) * 0.08)));
+  placeCamera();
+}, { passive: false });
+
+function resize() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(1, r.height);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas.parentElement);
+
+function worldPos(x, y, z) {
+  return new THREE.Vector3(x - (gridW - 1) / 2, z * LAYER_GAP, y - (gridH - 1) / 2);
+}
+
+function makeLabel(text) {
+  const font = "600 44px 'Chakra Petch', sans-serif";
+  const c = document.createElement("canvas");
+  let g = c.getContext("2d");
+  g.font = font;
+  c.width = Math.ceil(g.measureText(text.toUpperCase()).width) + 16; c.height = 64;
+  g = c.getContext("2d");
+  g.font = font;
+  g.fillStyle = "#9fb2ba";
+  g.fillText(text.toUpperCase(), 8, 46);
+  const tex = new THREE.CanvasTexture(c);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
+  sprite.renderOrder = 10;
+  const h = 0.55;
+  sprite.scale.set(h * c.width / c.height, h, 1);
+  return sprite;
+}
+
+function buildGrid(s) {
+  gridW = s.settings.width; gridH = s.settings.height;
+  tileGroup.clear(); decorGroup.clear(); tiles.clear();
+  survivorMeshes.forEach((m) => survivorGroup.remove(m)); survivorMeshes.clear();
+  const geo = new THREE.BoxGeometry(0.92, 0.22, 0.92);
+  for (const c of s.cells) {
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: LEVEL_BASE[c.z] }));
+    mesh.position.copy(worldPos(c.x, c.y, c.z));
+    mesh.userData = { kind: "cell", x: c.x, y: c.y, z: c.z };
+    tileGroup.add(mesh);
+    tiles.set(`${c.x},${c.y},${c.z}`, mesh);
+  }
+  for (const z of s.levels) {
+    // slab edge frame + label
+    const frame = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(gridW + 0.3, 0.02, gridH + 0.3)),
+      new THREE.LineBasicMaterial({ color: 0x3a4b52 }));
+    frame.position.set(0, z * LAYER_GAP - 0.12, 0);
+    frame.userData.level = z;
+    decorGroup.add(frame);
+    const label = makeLabel(`${LEVEL_NAME[z]}  Z=${z}`);
+    label.userData.level = z;
+    label.position.set(-(gridW / 2) - 0.4, z * LAYER_GAP + 0.1, (gridH / 2) + 0.4);
+    label.center.set(1, 0.5);
+    decorGroup.add(label);
+  }
+  // vertical shafts at corners hint that levels connect
+  const shaftMat = new THREE.LineDashedMaterial({ color: 0x33434a, dashSize: 0.15, gapSize: 0.12 });
+  for (const [x, zc] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const pts = [new THREE.Vector3(x * (gridW / 2 + 0.15), -LAYER_GAP - 0.12, zc * (gridH / 2 + 0.15)),
+                 new THREE.Vector3(x * (gridW / 2 + 0.15), LAYER_GAP - 0.12, zc * (gridH / 2 + 0.15))];
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), shaftMat);
+    line.computeLineDistances();
+    decorGroup.add(line);
+  }
+  orbit.radius = Math.max(17, Math.max(gridW, gridH) * 3.6) * (camera.aspect < 0.9 ? 1.6 : 1);
+  placeCamera();
+}
+
+// ---------- overlay colouring ----------
+const lerp = (a, b, t) => a + (b - a) * t;
+function ramp(stops, t) {
+  t = Math.min(1, Math.max(0, t));
+  for (let i = 1; i < stops.length; i++) {
+    if (t <= stops[i][0]) {
+      const [t0, c0] = stops[i - 1], [t1, c1] = stops[i];
+      const k = (t - t0) / (t1 - t0 || 1);
+      return new THREE.Color(lerp(c0[0], c1[0], k), lerp(c0[1], c1[1], k), lerp(c0[2], c1[2], k));
+    }
+  }
+  const c = stops[stops.length - 1][1];
+  return new THREE.Color(c[0], c[1], c[2]);
+}
+const RAMPS = {
+  radiation: { stops: [[0, [0.14, 0.2, 0.19]], [0.15, [0.2, 0.28, 0.24]], [0.45, [0.85, 0.75, 0.2]], [1, [0.95, 0.2, 0.15]]], max: 100, label: "Radiation 0 → 100 (average survivor absorbs above ~12)" },
+  toxicity: { stops: [[0, [0.16, 0.22, 0.2]], [0.3, [0.45, 0.6, 0.25]], [1, [0.7, 0.3, 0.85]]], max: 100, label: "Toxicity 0 → 100 (hurts above 20)" },
+  temperature: { stops: [[0, [0.85, 0.93, 1]], [0.45, [0.3, 0.55, 0.85]], [0.7, [0.3, 0.55, 0.35]], [1, [0.85, 0.6, 0.25]]], min: -40, max: 25, label: "Temperature −40 °C → 25 °C" },
+  cave_in_risk: { stops: [[0, [0.16, 0.22, 0.2]], [0.4, [0.8, 0.55, 0.2]], [1, [0.9, 0.2, 0.1]]], max: 100, label: "Cave-in risk 0 → 100 (underground only)" },
+};
+function cellColor(c) {
+  if (overlay === "terrain") {
+    const base = new THREE.Color(LEVEL_BASE[c.z]);
+    const total = c.water + c.biomass + c.scrap;
+    if (total < 3) return base.multiplyScalar(0.55);
+    const mix = new THREE.Color(0, 0, 0)
+      .add(new THREE.Color(0x3f7fc4).multiplyScalar(c.water / total))
+      .add(new THREE.Color(0x4f9a45).multiplyScalar(c.biomass / total))
+      .add(new THREE.Color(0x8d8a80).multiplyScalar(c.scrap / total));
+    return base.lerp(mix, Math.min(1, total / 45) * 0.85);
+  }
+  const r = RAMPS[overlay];
+  const v = c[overlay];
+  const t = r.min !== undefined ? (v - r.min) / (r.max - r.min) : v / r.max;
+  return ramp(r.stops, t);
+}
+function drawLegend() {
+  const el = $("legend");
+  if (overlay === "terrain") {
+    el.innerHTML = `<b style="color:var(--ink)">Resources</b>
+      <div class="row"><span style="color:#5a9fe0">■ water</span><span style="color:#62b356">■ biomass</span><span style="color:#aaa69a">■ scrap</span><span>dark = depleted</span></div>
+      <div>Survivors: colour = health · ring = pinned job</div>`;
+  } else {
+    const r = RAMPS[overlay];
+    const css = r.stops.map(([t, c]) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")}) ${t * 100}%`).join(",");
+    el.innerHTML = `<b style="color:var(--ink)">${r.label}</b><div class="ramp" style="background:linear-gradient(90deg,${css})"></div>`;
+  }
+}
+
+// ---------- survivors ----------
+const survivorGeo = new THREE.SphereGeometry(0.14, 16, 12).scale(1, 1.45, 1);
+const ringGeo = new THREE.TorusGeometry(0.22, 0.03, 6, 20);
+const haloGeo = new THREE.RingGeometry(0.3, 0.38, 24);
+function healthColor(h) {
+  return h > 60 ? new THREE.Color(0x5fb878) : h > 30 ? new THREE.Color(0xe3a33b) : new THREE.Color(0xe0574f);
+}
+function syncSurvivors(s) {
+  const seen = new Set();
+  const byCell = new Map();
+  for (const v of s.survivors) {
+    const k = `${v.x},${v.y},${v.z}`;
+    if (!byCell.has(k)) byCell.set(k, []);
+    byCell.get(k).push(v);
+  }
+  for (const [, group] of byCell) {
+    group.forEach((v, i) => {
+      seen.add(v.id);
+      let m = survivorMeshes.get(v.id);
+      if (!m) {
+        m = new THREE.Mesh(survivorGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }));
+        m.userData = { kind: "survivor", id: v.id };
+        const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xe3a33b }));
+        ring.rotation.x = Math.PI / 2; ring.position.y = -0.2; ring.name = "pin";
+        const halo = new THREE.Mesh(haloGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+        halo.rotation.x = -Math.PI / 2; halo.position.y = -0.2; halo.name = "halo";
+        m.add(ring, halo);
+        const p = worldPos(v.x, v.y, v.z);
+        m.position.set(p.x, p.y + 0.35, p.z);
+        survivorGroup.add(m);
+        survivorMeshes.set(v.id, m);
+      }
+      const n = group.length;
+      const ang = (i / n) * Math.PI * 2;
+      const off = n > 1 ? Math.min(0.32, 0.12 + n * 0.02) : 0;
+      const p = worldPos(v.x, v.y, v.z);
+      m.userData.goal = new THREE.Vector3(p.x + Math.cos(ang) * off, p.y + 0.35, p.z + Math.sin(ang) * off);
+      m.material.color.copy(healthColor(v.health));
+      m.getObjectByName("pin").visible = !!v.pinned;
+      m.getObjectByName("halo").visible = !!(selected && selected.kind === "survivor" && selected.id === v.id);
+      m.visible = focusLevel === null || v.z === focusLevel;
+    });
+  }
+  for (const [id, m] of survivorMeshes) {
+    if (!seen.has(id)) { survivorGroup.remove(m); survivorMeshes.delete(id); }
+  }
+}
+
+// ---------- disaster particles ----------
+const PARTICLES = 500;
+const pGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(PARTICLES * 3);
+pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
+const pMat = new THREE.PointsMaterial({ size: 0.08, transparent: true, opacity: 0.8, depthWrite: false });
+const particles = new THREE.Points(pGeo, pMat);
+particles.visible = false;
+world.add(particles);
+let pConf = null;
+const DISASTER_FX = {
+  "Acid Rain": { color: 0x9be05a, levels: [0, 1], speed: 0.16, size: 0.06 },
+  "Blizzard": { color: 0xf2f7ff, levels: [0, 1], speed: 0.045, size: 0.11, drift: 0.05 },
+  "Solar Flare": { color: 0xff7a45, levels: [0, 1], speed: 0.3, size: 0.05 },
+  "Radon Leak": { color: 0xa77bd6, levels: [-1], speed: -0.01, size: 0.14, hover: true },
+  "Cave-In Threat": { color: 0xc9a27a, levels: [-1], speed: 0.09, size: 0.07 },
+};
+function resetParticle(i) {
+  const lv = pConf.levels[i % pConf.levels.length];
+  pPos[i * 3] = (Math.random() - 0.5) * gridW;
+  pPos[i * 3 + 1] = lv * LAYER_GAP + (pConf.hover ? Math.random() * 1.2 : 0.3 + Math.random() * (LAYER_GAP - 0.4));
+  pPos[i * 3 + 2] = (Math.random() - 0.5) * gridH;
+}
+function setDisasterFx(name) {
+  const conf = DISASTER_FX[name];
+  if (!conf) { particles.visible = false; pConf = null; flareLight.intensity = 0; return; }
+  if (!pConf || pConf.name !== name) {
+    pConf = { ...conf, name };
+    for (let i = 0; i < PARTICLES; i++) resetParticle(i);
+  }
+  pMat.color.set(conf.color); pMat.size = conf.size;
+  particles.visible = true;
+}
+function tickParticles(t) {
+  if (!pConf) return;
+  for (let i = 0; i < PARTICLES; i++) {
+    const lv = pConf.levels[i % pConf.levels.length];
+    if (pConf.hover) {
+      pPos[i * 3 + 1] += Math.sin(t * 0.001 + i) * 0.003;
+      pPos[i * 3] += Math.cos(t * 0.0007 + i) * 0.004;
+    } else {
+      pPos[i * 3 + 1] -= pConf.speed;
+      if (pConf.drift) pPos[i * 3] += Math.sin(t * 0.002 + i) * pConf.drift * 0.3;
+      if (pPos[i * 3 + 1] < lv * LAYER_GAP + 0.12) {
+        resetParticle(i);
+        pPos[i * 3 + 1] = lv * LAYER_GAP + LAYER_GAP - 0.3;
+      }
+    }
+  }
+  pGeo.attributes.position.needsUpdate = true;
+  flareLight.intensity = pConf.name === "Solar Flare" ? 1.2 + Math.sin(t * 0.006) * 0.6 : 0;
+}
+
+// ---------- picking ----------
+const raycaster = new THREE.Raycaster();
+function pick(e) {
+  const r = canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects([...survivorGroup.children, ...tileGroup.children], false);
+  const hit = hits.find((h) => h.object.userData.kind && h.object.visible
+    && (focusLevel === null || h.object.userData.z === focusLevel || h.object.userData.kind === "survivor"));
+  selected = hit ? { ...hit.object.userData } : null;
+  render();
+}
+
+let last = 0;
+function animate(t) {
+  requestAnimationFrame(animate);
+  const dt = Math.min(0.1, (t - last) / 1000); last = t;
+  for (const m of survivorMeshes.values()) {
+    if (m.userData.goal) m.position.lerp(m.userData.goal, 1 - Math.pow(0.001, dt));
+    const halo = m.getObjectByName("halo");
+    if (halo.visible) halo.rotation.z += dt * 1.5;
+  }
+  tickParticles(t);
+  renderer.render(scene, camera);
+}
+
+// ------------------------------------------------------------------ panel
+function fmtBar(label, value, color, max = 100) {
+  const pct = Math.max(0, Math.min(100, (value / max) * 100));
+  return `<div class="bar"><span>${label}</span><div class="track"><div class="fill" style="width:${pct}%;background:${color}"></div></div><span class="num">${Math.round(value)}</span></div>`;
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function render() {
+  const s = state;
+  if (!s) return;
+  $("turn").textContent = s.turn;
+  const d = $("disaster");
+  if (s.disaster === "None") { d.className = "chip calm"; d.textContent = "Calm"; }
+  else { d.className = "chip alert"; d.textContent = `${s.disaster} · ${s.disaster_turns_left}t`; }
+  $("forecast").textContent = "Next: " + s.forecast.map((f) => f === "None" ? "calm" : f).join(" → ") + `   ·   escalation ×${s.escalation.toFixed(2)}`;
+  $("settings").textContent = `${s.settings.difficulty} · seed ${s.settings.seed ?? "random"}`;
+
+  const alive = s.survivors;
+  const avg = (k) => alive.length ? alive.reduce((a, v) => a + v[k], 0) / alive.length : 0;
+  const done = s.tech.filter((t) => t.completed).length;
+  $("s-alive").textContent = alive.length;
+  $("s-tech").textContent = `${done}/${s.tech.length}`;
+  $("s-score").textContent = s.score;
+  $("s-water").textContent = s.stockpile.water;
+  $("s-biomass").textContent = s.stockpile.biomass;
+  $("s-scrap").textContent = s.stockpile.scrap;
+  $("vitals").innerHTML =
+    fmtBar("Health", avg("health"), "var(--good)") +
+    fmtBar("Hunger", avg("hunger"), "var(--warn)") +
+    fmtBar("Radiation", avg("radiation"), "var(--bad)") +
+    fmtBar("Energy", avg("energy"), "#5a9fe0");
+  $("plan").textContent = s.plan;
+  drawSpark(s.history);
+
+  // orders
+  $("focus-label").textContent = s.focus === "auto" ? "coordinator in charge" : `order: ${s.focus}`;
+  $("focus").innerHTML = Object.entries(s.options.focuses).map(([k, desc]) =>
+    `<button data-focus="${k}" class="${s.focus === k ? "on" : ""}" title="${esc(desc)}">${k[0].toUpperCase() + k.slice(1)}<small>${esc(desc)}</small></button>`).join("");
+  const docSel = $("doctrine");
+  if (docSel.options.length !== s.options.doctrines.length) {
+    docSel.innerHTML = s.options.doctrines.map((d) => `<option value="${d}">${d}</option>`).join("");
+  }
+  docSel.value = s.settings.doctrine;
+
+  // levels
+  $("levels").innerHTML = [...s.levels].reverse().map((z) => {
+    const cells = s.cells.filter((c) => c.z === z);
+    const m = (k) => Math.round(cells.reduce((a, c) => a + c[k], 0) / cells.length);
+    const pop = alive.filter((v) => v.z === z).length;
+    const left = s.forbidden[String(z)];
+    return `<div class="level ${left ? "forbidden" : ""}">
+      <div><b>${LEVEL_NAME[z]}</b> <span class="muted">Z=${z} · ${pop} here</span>
+      <div class="meta">rad ${m("radiation")} · tox ${m("toxicity")} · ${m("temperature")} °C${z === -1 ? ` · cave-in ${m("cave_in_risk")}` : ""}</div></div>
+      ${left ? `<button data-lift="${z}">Lift (${left})</button>` : `<button data-evac="${z}">Evacuate</button>`}
+    </div>`;
+  }).join("");
+
+  // tech
+  $("rp").textContent = `${s.research_points} RP`;
+  $("tech").innerHTML = s.tech.map((t) => {
+    let cls = "", st, pct = 0;
+    if (t.completed) { cls = "done"; st = "Complete"; pct = 100; }
+    else if (t.unlocked) { cls = "building"; pct = Math.round((t.progress / t.cost) * 100); st = `Building ${t.progress}/${t.cost} scrap`; }
+    else { st = `Needs ${t.research_cost} RP`; pct = Math.min(100, Math.round((s.research_points / t.research_cost) * 100)); }
+    return `<div class="tech-item ${cls}" title="${esc(t.description)}"><div class="head"><span>${esc(t.name)}</span><span class="state">${st}</span></div>
+      <div class="bar" style="grid-template-columns:1fr"><div class="track"><div class="fill" style="width:${pct}%;background:${t.completed ? "var(--good)" : t.unlocked ? "var(--accent)" : "var(--line)"}"></div></div></div></div>`;
+  }).join("");
+
+  // log
+  const logEl = $("log");
+  const stick = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 10;
+  logEl.innerHTML = s.log.map((l) => `<div class="${l.includes("ORDER") ? "order" : ""}">${esc(l)}</div>`).join("");
+  if (stick) logEl.scrollTop = logEl.scrollHeight;
+
+  renderInspect();
+
+  // 3D
+  for (const c of s.cells) {
+    const m = tiles.get(`${c.x},${c.y},${c.z}`);
+    if (!m) continue;
+    m.material.color.copy(cellColor(c));
+    const isSel = selected && selected.kind === "cell" && selected.x === c.x && selected.y === c.y && selected.z === c.z;
+    m.material.emissive = new THREE.Color(isSel ? 0x333322 : 0x000000);
+    const faded = focusLevel !== null && c.z !== focusLevel;
+    m.material.transparent = faded || !!s.forbidden[String(c.z)];
+    m.material.opacity = faded ? 0.08 : s.forbidden[String(c.z)] ? 0.45 : 1;
+    m.material.depthWrite = !faded;
+  }
+  decorGroup.children.forEach((o) => {
+    if (o.userData.level !== undefined) o.visible = focusLevel === null || o.userData.level === focusLevel;
+  });
+  syncSurvivors(s);
+  setDisasterFx(s.disaster);
+
+  // end banner
+  if (!s.running && s.turn !== bannerDismissedTurn) {
+    $("banner-title").textContent = s.outcome === "RESTORATION" ? "Restoration achieved" : s.outcome === "EXTINCTION" ? "The colony is gone" : s.outcome;
+    $("banner-title").style.color = s.outcome === "RESTORATION" ? "var(--good)" : "var(--bad)";
+    $("banner-report").textContent = s.report || "";
+    $("banner").hidden = false;
+    setPlaying(false);
+  } else if (s.running) {
+    $("banner").hidden = true;
+  }
+  $("play").disabled = $("step").disabled = $("step10").disabled = !s.running;
+}
+
+function renderInspect() {
+  const s = state, body = $("inspect-body");
+  if (!selected) { body.className = "muted"; body.textContent = "Click a survivor or a tile in the 3D view."; return; }
+  body.className = "";
+  if (selected.kind === "survivor") {
+    const v = s.survivors.find((x) => x.id === selected.id);
+    if (!v) { body.className = "muted"; body.textContent = "That survivor has died."; return; }
+    const g = v.genes;
+    body.innerHTML = `<div class="survivor-card">
+      <div><b>${esc(v.name)}</b> <span class="muted">Gen ${v.generation} · age ${v.age}/${v.lifespan} · (${v.x},${v.y}) Z=${v.z}</span></div>
+      <div class="muted" style="font-size:12px">Job: <span style="color:var(--ink)">${esc(v.role)}</span> · ${esc(v.status)}</div>
+      <div class="bars">${fmtBar("Health", v.health, "var(--good)")}${fmtBar("Energy", v.energy, "#5a9fe0")}${fmtBar("Hunger", v.hunger, "var(--warn)")}${fmtBar("Radiation", v.radiation, "var(--bad)")}</div>
+      <div class="genes">
+        <div>Speed<b>${g.speed.toFixed(2)}</b></div><div>Forage<b>${g.foraging.toFixed(2)}</b></div>
+        <div>RadRes<b>${g.rad_resistance.toFixed(2)}</b></div><div>Cold<b>${g.cold_resistance.toFixed(2)}</b></div>
+        <div>Intel<b>${g.intelligence.toFixed(2)}</b></div>
+      </div>
+      <div class="row"><span class="muted" style="font-size:12px">Pin job:</span>
+        ${s.options.roles.map((r) => `<button data-pin="${r}" class="${v.pinned === r ? "on" : ""}">${r}</button>`).join("")}
+        ${v.pinned ? `<button data-pin="">Release</button>` : ""}
+      </div></div>`;
+  } else {
+    const c = s.cells.find((x) => x.x === selected.x && x.y === selected.y && x.z === selected.z);
+    const here = s.survivors.filter((v) => v.x === c.x && v.y === c.y && v.z === c.z);
+    body.innerHTML = `<div><b>${LEVEL_NAME[c.z]} tile (${c.x},${c.y})</b></div>
+      <div class="stats" style="margin-top:8px">
+        <div class="stat"><label>Water</label><span class="num">${c.water}</span></div>
+        <div class="stat"><label>Biomass</label><span class="num">${c.biomass}</span></div>
+        <div class="stat"><label>Scrap</label><span class="num">${c.scrap}</span></div>
+        <div class="stat"><label>Radiation</label><span class="num">${c.radiation}</span></div>
+        <div class="stat"><label>Toxicity</label><span class="num">${c.toxicity}</span></div>
+        <div class="stat"><label>Temp °C</label><span class="num">${c.temperature}</span></div>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:12px">${here.length ? "Here: " + here.map((v) => `<a href="#" data-select="${v.id}" style="color:var(--accent)">${esc(v.name)}</a>`).join(", ") : "Nobody here."}</div>`;
+  }
+}
+
+function drawSpark(hist) {
+  const cv = $("spark"), g = cv.getContext("2d");
+  const w = cv.width = cv.clientWidth * devicePixelRatio, h = cv.height = cv.clientHeight * devicePixelRatio;
+  g.clearRect(0, 0, w, h);
+  if (hist.length < 2) return;
+  const maxA = Math.max(10, ...hist.map((p) => p.alive));
+  const X = (i) => (i / (hist.length - 1)) * (w - 4) + 2;
+  const Y = (v) => h - 3 - (v / maxA) * (h - 8);
+  g.beginPath(); g.moveTo(X(0), h);
+  hist.forEach((p, i) => g.lineTo(X(i), Y(p.alive)));
+  g.lineTo(X(hist.length - 1), h); g.closePath();
+  g.fillStyle = "rgba(95,184,120,.18)"; g.fill();
+  g.beginPath(); hist.forEach((p, i) => i ? g.lineTo(X(i), Y(p.alive)) : g.moveTo(X(i), Y(p.alive)));
+  g.strokeStyle = "#5fb878"; g.lineWidth = 1.5 * devicePixelRatio; g.stroke();
+  // tech completions as amber ticks
+  g.fillStyle = "#e3a33b";
+  hist.forEach((p, i) => { if (i && p.tech > hist[i - 1].tech) g.fillRect(X(i) - 1, 0, 2 * devicePixelRatio, h); });
+  const lastP = hist[hist.length - 1];
+  g.beginPath(); g.arc(X(hist.length - 1), Y(lastP.alive), 2.5 * devicePixelRatio, 0, 7); g.fillStyle = "#5fb878"; g.fill();
+  g.fillStyle = "#8397a0"; g.font = `${10 * devicePixelRatio}px IBM Plex Mono, monospace`;
+  g.fillText(`pop ${lastP.alive} · peak ${maxA}`, 4, 11 * devicePixelRatio);
+}
+
+// ------------------------------------------------------------------ actions
+async function apply(promise) {
+  try { state = await promise; render(); }
+  catch (e) { $("plan").textContent = "Error: " + e.message; }
+}
+async function stepOnce(n = 1) {
+  if (busy || !state || !state.running) return;
+  busy = true;
+  try { await apply(api("/api/step", { n })); } finally { busy = false; }
+}
+function setPlaying(on) {
+  playing = on;
+  $("play").textContent = on ? "❚❚ Pause" : "▶ Play";
+  $("play").classList.toggle("on", on);
+  clearInterval(timer);
+  if (on) timer = setInterval(() => stepOnce(1), +$("speed").value);
+}
+$("play").onclick = () => setPlaying(!playing);
+$("step").onclick = () => stepOnce(1);
+$("step10").onclick = () => stepOnce(10);
+$("speed").onchange = () => playing && setPlaying(true);
+document.querySelectorAll("[data-overlay]").forEach((b) => b.onclick = () => {
+  overlay = b.dataset.overlay;
+  document.querySelectorAll("[data-overlay]").forEach((x) => x.classList.toggle("on", x === b));
+  drawLegend(); render();
+});
+document.querySelectorAll("[data-level]").forEach((b) => b.onclick = () => {
+  focusLevel = b.dataset.level === "all" ? null : +b.dataset.level;
+  document.querySelectorAll("[data-level]").forEach((x) => x.classList.toggle("on", x === b));
+  orbit.target.set(0, focusLevel === null ? 0 : focusLevel * LAYER_GAP, 0);
+  placeCamera(); render();
+});
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button, a");
+  if (!t) return;
+  if (t.dataset.focus) apply(api("/api/command", { type: "focus", focus: t.dataset.focus }));
+  else if (t.dataset.evac) apply(api("/api/command", { type: "evacuate", z: +t.dataset.evac, turns: 6 }));
+  else if (t.dataset.lift) apply(api("/api/command", { type: "evacuate", z: +t.dataset.lift, turns: 0 }));
+  else if (t.dataset.pin !== undefined && selected && selected.kind === "survivor")
+    apply(api("/api/command", { type: "pin", id: selected.id, role: t.dataset.pin || null }));
+  else if (t.dataset.select) { e.preventDefault(); selected = { kind: "survivor", id: +t.dataset.select }; render(); }
+});
+$("doctrine").onchange = (e) => apply(api("/api/command", { type: "doctrine", doctrine: e.target.value }));
+
+function openNew() {
+  const s = state;
+  $("nd-difficulty").innerHTML = s.options.difficulties.map((d) => `<option ${d === s.settings.difficulty ? "selected" : ""}>${d}</option>`).join("");
+  $("nd-doctrine").innerHTML = s.options.doctrines.map((d) => `<option ${d === s.settings.doctrine ? "selected" : ""}>${d}</option>`).join("");
+  $("nd-err").textContent = "";
+  $("newdlg").showModal();
+}
+$("newgame").onclick = openNew;
+$("banner-new").onclick = openNew;
+$("banner-close").onclick = () => { bannerDismissedTurn = state.turn; $("banner").hidden = true; };
+$("newform").addEventListener("submit", async (e) => {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    setPlaying(false);
+    state = await api("/api/new", Object.fromEntries(f.entries()));
+    selected = null; bannerDismissedTurn = -1;
+    buildGrid(state); render();
+    $("newdlg").close();
+  } catch (err) { $("nd-err").textContent = err.message; }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input, select, textarea") || $("newdlg").open) return;
+  if (e.code === "Space") { e.preventDefault(); if (state && state.running) setPlaying(!playing); }
+  else if (e.key === ".") stepOnce(1);
+});
+
+// ------------------------------------------------------------------ boot
+(async function boot() {
+  resize(); placeCamera(); drawLegend();
+  requestAnimationFrame(animate);
+  try {
+    state = await api("/api/state");
+    buildGrid(state); render();
+  } catch (e) {
+    $("plan").textContent = "Could not reach the PARS server. Start it with: python -m pars.web";
+  }
+})();
+</script>
+</body>
+</html>

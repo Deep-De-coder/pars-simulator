@@ -9,6 +9,7 @@ from pars.survivor import Survivor, reset_ids
 from pars.coordinator import CoordinatorAgent
 from pars.tech import TechTree
 from pars.config import get_difficulty, get_doctrine
+from pars.coordinator import FOCUSES, PINNABLE_ROLES
 from pars.report import gene_averages
 
 MAX_POPULATION = 30
@@ -161,6 +162,7 @@ class Simulation:
 
     def _bury_dead(self):
         for d in [s for s in self.survivors if not s.alive]:
+            self.coordinator.pins.pop(d.id, None)
             cause = d.cause_of_death or "Unknown"
             self.stats["deaths"] += 1
             self.stats["causes_of_death"][cause] = self.stats["causes_of_death"].get(cause, 0) + 1
@@ -198,7 +200,7 @@ class Simulation:
         alive = self.alive
         pop = len(alive)
         if pop >= MAX_POPULATION or plan in ("DISASTER_RESPONSE", "SURVIVAL",
-                                             "FORAGE_PRIORITY"):
+                                             "FORAGE_PRIORITY", "SHELTER"):
             return
         max_births = self.doctrine.max_births if plan == "EXPAND" else 1
         births = 0
@@ -226,6 +228,50 @@ class Simulation:
                 births += 1
                 pop += 1
                 break
+
+    # ------------------------------------------------------------ player orders
+    def _order(self, msg):
+        self.coordinator.log(f"\U0001f4e3 ORDER: {msg}")
+
+    def set_focus(self, focus):
+        """Bias the coordinator: auto, forage, build, research or shelter."""
+        if focus not in FOCUSES:
+            raise ValueError(f"Unknown focus {focus!r}; choose from {', '.join(FOCUSES)}")
+        self.coordinator.focus = focus
+        self._order(f"colony focus -> {focus} ({FOCUSES[focus]})")
+
+    def evacuate(self, z, turns=6):
+        """Forbid level z for a number of turns: survivors leave it and avoid it."""
+        if z not in self.grid.z_levels:
+            raise ValueError(f"Unknown level {z!r}")
+        if turns <= 0:
+            self.coordinator.forbidden.pop(z, None)
+            self._order(f"evacuation of Z={z} lifted")
+            return
+        if len(set(self.coordinator.forbidden) | {z}) >= len(self.grid.z_levels):
+            raise ValueError("At least one level must stay open")
+        self.coordinator.forbidden[z] = turns
+        self._order(f"evacuate Z={z} for {turns} turns")
+
+    def pin_role(self, survivor_id, role):
+        """Lock a survivor into a job (None to release). Safety moves still apply."""
+        s = next((s for s in self.alive if s.id == survivor_id), None)
+        if s is None:
+            raise ValueError(f"No living survivor with id {survivor_id}")
+        if role is None:
+            self.coordinator.pins.pop(survivor_id, None)
+            self._order(f"{s.name} released to coordinator")
+            return
+        if role not in PINNABLE_ROLES:
+            raise ValueError(f"Role must be one of {', '.join(PINNABLE_ROLES)}")
+        self.coordinator.pins[survivor_id] = role
+        self._order(f"{s.name} pinned to {role}")
+
+    def set_doctrine(self, name):
+        """Switch coordinator strategy mid-game."""
+        self.doctrine = get_doctrine(name)
+        self.coordinator.doctrine = self.doctrine
+        self._order(f"doctrine -> {self.doctrine.name}")
 
     def run(self, max_turns=0, delay_ms=500):
         """Run the simulation loop, rendering each turn."""
