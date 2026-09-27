@@ -39,6 +39,8 @@
   const DEFAULT_BRAIN = {
     safety: 1, warmth: 1, fuel: 1, water: 1, waterSource: 1, food: 1, farming: 1, power: 1, growth: 1,
     crisisDamp: 0.65, fieldsMult: 0.9, woodStock: 6, scrapStock: 6, fireResponse: 1, repair: 1, boilBias: 1,
+    coverPatch: 1, coverBrace: 1, // how much to follow the handbook's greenhouse advice
+    coverGain: 1, // how much a greenhouse's expected extra food counts
   };
 
   const YEAR = 360;
@@ -974,8 +976,16 @@
           const adv = this.cropAdvice(t);
           const best = adv[0];
           if (best && best.expected >= 8) add({ label: `Plant ${best.name.toLowerCase()} at (${t.x},${t.y})`, need: "food", value: best.expected * foodValue * 0.35, why: `best choice here: expect ~${best.expected} food in ${best.days} days`, task: { kind: "plant", crop: best.crop, x: t.x, y: t.y, work: 1 }, skill: "farming", advice: adv.slice(0, 4) });
-          else if (this.sc.climate.mean < 12 && !t.greenhouse && this.seeds && Object.values(this.seeds).some((n) => n > 0)) {
-            buildOption("greenhouse", 30 * foodValue * 0.35, "too cold to grow anything uncovered right now", t);
+          // Would a cover change that? Ask the same question for this plot
+          // under a greenhouse (+12 °C), using our own crop beliefs.
+          if (!t.greenhouse && this.seeds && Object.values(this.seeds).some((n) => n > 0)) {
+            // Look two steps ahead: a cover, and a cover with grow lights
+            // (worth a bit less, since the lights will need power too).
+            const have = best ? best.expected : 0;
+            const c1 = this.cropAdvice({ ...t, greenhouse: true })[0], c2 = this.cropAdvice({ ...t, greenhouse: true, lights: true })[0];
+            const g1 = c1 ? c1.expected - have : 0, g2 = c2 ? (c2.expected - have) * 0.75 : 0;
+            const gh = g2 > g1 ? c2 : c1, gain = Math.max(g1, g2);
+            if (gain >= 10) buildOption("greenhouse", gain * foodValue * 0.35 * this.brain.coverGain, best && best.expected >= 8 ? `a cover would grow ${gh.name.toLowerCase()} here (~${gh.expected} food vs ~${best.expected})` : `too cold to grow anything uncovered now; under a cover ${gh.name.toLowerCase()} would give ~${gh.expected}`, t);
           }
         }
         if (!t.crop && t.fert < 0.6 && this.inv.compost >= 2 && !this.sc.terrain.sterile || (!t.crop && t.fert < 0.7 && this.inv.compost >= 2 && this.sc.terrain.sterile)) {
@@ -1062,16 +1072,20 @@
       const b = this.brain, H = this.beliefs.hazard;
       // --- greenhouses (handbook: brace covers before a storm; patch a torn
       // cover the same day, or the crop under it freezes tonight)
+      // Only worth the work if, by our own frost beliefs, the crop would
+      // freeze without its cover in the next few days.
+      const coldest = Math.min(this.weather.temp, ...this.forecast.map((f) => f.temp));
       for (const t of this.tiles) {
         if (t.crop && !t.greenhouse && t.coverLost !== undefined && this.day - t.coverLost <= 1 && !this.reserved(t)) {
           const cb = this.beliefs.crops[t.crop.type];
-          if (this.weather.temp <= cb.frostKill + 4 || this.sc.terrain.sterile) {
-            const mat = this.inv.plastic >= 2 ? "plastic" : this.inv.scrap >= 3 ? "scrap" : null;
-            if (mat) add({ label: `Patch the torn greenhouse at (${t.x},${t.y})`, need: "food", value: 20 + t.crop.growth * 30, why: `the ${cb.name.toLowerCase()} under it freezes tonight without cover`, task: { kind: "patch", x: t.x, y: t.y, work: 0.6, mat }, skill: "building" });
+          if (coldest <= cb.frostKill + 1) {
+            // patch with whatever is plentiful; plastic is scarce and builds new greenhouses
+            const mat = this.inv.scrap >= 3 + this.brain.scrapStock ? "scrap" : this.inv.plastic >= 2 ? "plastic" : this.inv.scrap >= 3 ? "scrap" : null;
+            if (mat) add({ label: `Patch the torn greenhouse at (${t.x},${t.y})`, need: "food", value: (20 + t.crop.growth * 30) * this.brain.coverPatch, why: `the ${cb.name.toLowerCase()} under it freezes tonight without cover`, task: { kind: "patch", x: t.x, y: t.y, work: 0.6, mat }, skill: "building" });
           }
         }
-        if (A.stormSoon && t.greenhouse && t.crop && (t.bracedUntil || 0) < this.day && !this.reserved(t)) {
-          add({ label: `Brace the greenhouse at (${t.x},${t.y})`, need: "safety", value: 4 + t.crop.growth * 8 + (this.sc.terrain.sterile ? 6 : 0), why: "a storm is coming; weighted, braced covers rarely tear", task: { kind: "brace", x: t.x, y: t.y, work: 0.5 }, skill: "building" });
+        if (A.stormSoon && t.greenhouse && t.crop && (t.bracedUntil || 0) < this.day && !this.reserved(t) && coldest <= this.beliefs.crops[t.crop.type].frostKill + 1) {
+          add({ label: `Brace the greenhouse at (${t.x},${t.y})`, need: "safety", value: (4 + t.crop.growth * 8 + (this.sc.terrain.sterile ? 6 : 0)) * this.brain.coverBrace, why: "a storm is coming; weighted, braced covers rarely tear", task: { kind: "brace", x: t.x, y: t.y, work: 0.5 }, skill: "building" });
         }
       }
       const isHome = (t) => t.x === this.home.x && t.y === this.home.y;
@@ -1472,7 +1486,8 @@
       }
       if (task.kind === "patch") {
         if (!t.crop || t.greenhouse) return;
-        if (task.mat === "plastic" && this.inv.plastic >= 2) this.inv.plastic -= 2;
+        if (task.mat === "scrap" && this.inv.scrap >= 3) this.inv.scrap -= 3;
+        else if (this.inv.plastic >= 2) this.inv.plastic -= 2;
         else if (this.inv.scrap >= 3) this.inv.scrap -= 3;
         else return;
         t.greenhouse = true; t.lights = !!t.hadLights; t.coverLost = undefined;
