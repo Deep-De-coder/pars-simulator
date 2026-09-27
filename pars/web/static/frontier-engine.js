@@ -1100,8 +1100,16 @@
       b.n++;
       b.m += (value - b.m) / b.n;
       b.seen = (b.seen || 0) + 1;
+      // running mean/variance of what was actually seen (no handbook prior)
+      const d0 = value - (b.om || 0);
+      b.om = (b.om || 0) + d0 / b.seen;
+      b.M2 = (b.M2 || 0) + d0 * (value - b.om);
       const hand = HANDBOOK_YIELDS[key];
-      if (this.learnYields && !b.told && b.seen >= 8 && Math.abs(b.m - hand) / hand > 0.3) {
+      // only call it a lesson when the gap is bigger than luck explains:
+      // two standard errors under "the handbook was right"
+      const se = hand < 1 ? Math.sqrt(hand * (1 - hand) / b.seen) : Math.max(0.05 * hand, Math.sqrt(b.M2 / Math.max(1, b.seen - 1) / b.seen));
+      const gap = Math.abs(b.om - hand);
+      if (this.learnYields && !b.told && b.seen >= 8 && gap / hand > 0.3 && gap > 2.5 * se) {
         b.told = true;
         const msg = hand < 1
           ? `${YIELD_LABEL[key]}: it happens in about ${Math.round(b.m * 100)}% of digs here, not ${Math.round(hand * 100)}% as the handbook says.`
