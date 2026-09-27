@@ -32,7 +32,7 @@
     waterSource: [0.3, 3, true], food: [0.3, 3, true], farming: [0.3, 3, true], power: [0.3, 3, true],
     growth: [0.2, 3, true], crisisDamp: [0, 0.95, false], fieldsMult: [0.5, 1.8, false],
     woodStock: [2, 20, false], scrapStock: [2, 20, false], fireResponse: [0.3, 3, true],
-    repair: [0.3, 3, true], boilBias: [0.5, 3, true], coverPatch: [0, 2.5, false], coverBrace: [0, 2.5, false], coverGain: [0.2, 3, true], waterCare: [0, 1.5, false],
+    repair: [0.3, 3, true], boilBias: [0.5, 3, true], coverPatch: [0, 2.5, false], coverBrace: [0, 2.5, false], coverGain: [0.2, 3, true], waterCare: [0, 1.5, false], frostCover: [0, 2.5, false], storage: [0, 3, false],
   };
   const KEYS = Object.keys(SPACE);
   const toUnit = (k, v) => { const [lo, hi, lg] = SPACE[k]; return lg ? (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) : (v - lo) / (hi - lo); };

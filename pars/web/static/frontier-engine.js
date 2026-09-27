@@ -42,6 +42,8 @@
     coverPatch: 1, coverBrace: 1, // how much to follow the handbook's greenhouse advice
     coverGain: 1, // how much a greenhouse's expected extra food counts
     waterCare: 0, // 0 = water only when parched (handbook); 1 = keep soil at the crop's need
+    frostCover: 1, // how much to value covering plants when frost is forecast
+    storage: 1, // how much to value batteries that carry good days into bad
   };
 
   const YEAR = 360;
@@ -103,6 +105,7 @@
       this.recentHarvest = []; // [day, food]
       this.plotStats = { food: 0, plotDays: 0 }; // observed food per plot per day in this place
       this.power = { produced: 0, used: 0, stored: 0, capacity: 10, shortfall: [] };
+      this.baseCapacity = 10;
       this.water = { produced: 0 };
       this.discoveries = {};
       this.initBeliefs();
@@ -221,6 +224,7 @@
         const spot = this.neighbors(this.home).find((t) => this.isLand(t) && !t.structure && t.type !== "ice");
         if (spot) spot.structure = { type: "solar_array", hp: 100, panels: sc.startPower.panels, built: 0 };
         this.power.capacity = sc.startPower.battery;
+        this.baseCapacity = sc.startPower.battery;
         this.power.stored = sc.startPower.battery;
       }
       // desert oases: small ponds in the lowest ground
@@ -537,6 +541,7 @@
       (this.powerLog = this.powerLog || []).push(power);
       if (this.powerLog.length > 30) this.powerLog.shift();
       this.power.used = used;
+      this.power.capacity = this.baseCapacity + 20 * this.tiles.filter((x) => x.structure && x.structure.type === "battery_bank").length;
       this.power.stored = Math.min(this.power.capacity, avail);
       this.power.shortfall = [...new Set(short)];
       this.water.produced = r1(water);
@@ -546,7 +551,8 @@
 
     // ------------------------------------------------------------ crops
     cropTemp(t, temp, cropId = t.crop && t.crop.type) {
-      let warmed = temp + (t.greenhouse ? 12 : 0);
+      // straw or cloth over the plants holds a few degrees through a cold night
+      let warmed = temp + (t.greenhouse ? 12 : (t.coveredUntil || -1) >= this.day ? 4 : 0);
       // once we've learned to, we open the vents on warm days so the plot
       // doesn't cook: no warmer than the crop likes, never cooler than outside
       if (t.greenhouse && this.discoveries.vents && cropId) warmed = Math.max(temp, Math.min(warmed, this.beliefs.crops[cropId].optHi));
@@ -936,6 +942,11 @@
           const g = this.gatherOption(res, amt);
           // materials inherit the priority of what they're for
           if (g) add({ ...g, value: parentValue * 0.55 / Math.max(1, g.daysNeeded), why: `to get ${amt} ${res} for ${parentLabel}${g.expectDays && g.expectDays !== g.daysNeeded ? ` (from experience: ~${g.expectDays} days of digging)` : ""}`, need: parentNeed || "materials" });
+          // Handbook: old motors and appliances in the scrap pile are full of
+          // copper; stripping it is slow but sure (6 scrap -> 1 wire a day).
+          if (res === "wire" && this.inv.scrap >= 6 + this.brain.scrapStock) {
+            add({ label: "Strip wire out of scrap", need: parentNeed || "materials", value: parentValue * 0.55 / Math.max(1, amt), why: `to get ${amt} wire for ${parentLabel}; we have ${Math.floor(this.inv.scrap)} scrap and salvaging wire is hit and miss`, task: { kind: "strip_wire", x: this.home.x, y: this.home.y, work: 1 }, skill: "engineering" });
+          }
         }
       };
       const buildOption = (id, value, why, site = null) => {
@@ -1110,6 +1121,17 @@
         if (this.inv.panels > 0 || this.tiles.some((t) => t.type === "ruins" && t.salvage > 0)) buildOption("solar_array", u.power * worth(b.solar_array.output) * horizon * 0.25, `panels give ~${b.solar_array.output.toFixed(1)}/day here${unmet > 1 ? `; we're ${unmet.toFixed(0)} short` : ""}`);
         buildOption("wind_turbine", u.power * worth(b.wind_turbine.output) * horizon * 0.25, `turbines give ~${b.wind_turbine.output.toFixed(1)}/day here${unmet > 1 ? `; we're ${unmet.toFixed(0)} short` : ""}`);
         if (this.inv.compost > 8) buildOption("biogas", u.power * 2 * horizon * 0.2, "spare compost can make methane");
+        // Storage: from our own record, where a cut would kill the crops and
+        // output swings a lot between typical and bad days, a battery carries
+        // good days' surplus into bad ones, so more plots can be lit safely.
+        const L = this.powerLog || [];
+        const litCrops = this.tiles.filter((t) => t.lights && t.crop).length;
+        // only once there are lit crops to protect (about a bank per 3 plots):
+        // wire spent on batteries too early is wire the grow lights don't get
+        if (L.length >= 10 && this.lethalCut() && litCrops >= 2 && this.power.capacity < this.baseCapacity + 20 * Math.ceil(litCrops / 3)) {
+          const swing = this.firmPower(0.5) - this.firmPower(0.1);
+          if (swing >= 2) buildOption("battery_bank", Math.min(swing, 20) * 4 * this.brain.storage, `output swings between ~${this.firmPower(0.1).toFixed(0)} and ~${this.firmPower(0.5).toFixed(0)} a day; storing the surplus lets us light more plots safely`);
+        }
       }
       // --- growth
       if (u.growth > 0.1 && !this.sc.noRadio && A.shelterCap >= pop + 2 && this.power.produced > 3 && !this.tiles.some((t) => t.structure && t.structure.type === "radio")) buildOption("radio", u.growth * 40, "we have spare beds, and a radio might reach other survivors");
@@ -1144,6 +1166,17 @@
     }
     hazardOptions(A, add) {
       const b = this.brain, H = this.beliefs.hazard;
+      // --- frost cover (handbook: when a frost is forecast, cover tender
+      // plants with straw or cloth). Insurance margin of 3 °C, because the
+      // handbook's frost limits are known to be optimistic.
+      const snapLeft = this.disaster && this.disaster.type === "frost" ? this.disaster.daysLeft : 0;
+      const fmin = Math.min(this.weather.temp, ...this.forecast.slice(0, 2).map((f, i) => f.temp - (f.event === "frost" || i < snapLeft ? 12 : 0)));
+      for (const t of this.tiles) {
+        if (!t.crop || t.greenhouse || (t.coveredUntil || -1) > this.day || this.reserved(t)) continue;
+        const cb = this.beliefs.crops[t.crop.type];
+        if (fmin > cb.frostKill + 3) continue;
+        add({ label: `Cover the ${cb.name.toLowerCase()} at (${t.x},${t.y}) against frost`, need: "food", value: (4 + t.crop.growth * cb.yield * 0.3) * this.brain.frostCover, why: `forecast low ${fmin.toFixed(0)} °C; we think it dies at ${cb.frostKill} °C`, task: { kind: "frost_cover", x: t.x, y: t.y, work: 0.34 }, skill: "farming" });
+      }
       // --- greenhouses (handbook: brace covers before a storm; patch a torn
       // cover the same day, or the crop under it freezes tonight)
       // Only worth the work if, by our own frost beliefs, the crop would
@@ -1569,6 +1602,8 @@
         return;
       }
       if (task.kind === "brace") { t.bracedUntil = this.day + 6; return; }
+      if (task.kind === "frost_cover") { t.coveredUntil = this.day + 3; return; }
+      if (task.kind === "strip_wire") { if (this.inv.scrap >= 6) { this.inv.scrap -= 6; this.inv.wire += 1; } return; }
       if (task.kind === "fertilize") {
         if (this.inv.compost < 2) return;
         this.inv.compost -= 2; t.fert = clamp(t.fert + 0.15, 0, 1);

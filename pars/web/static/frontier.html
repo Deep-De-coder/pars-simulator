@@ -747,6 +747,7 @@ function buildDeco(t, s) {
         add(g, G.box, 0x8a8a8a, 0.025, 0.24, 0.025, x, 0.12, z + 0.05);
       }
     }
+    if (ty === "battery_bank") { for (let i = 0; i < 3; i++) { add(g, G.box, 0x2a2e33, 0.18, 0.2, 0.28, (i - 1) * 0.22, 0.1, 0); add(g, G.box, 0xc9a23a, 0.18, 0.03, 0.08, (i - 1) * 0.22, 0.215, 0.06); } }
     if (ty === "biogas") { add(g, G.cyl, 0x4a6a4a, 0.42, 0.34, 0.42, 0, 0.17, 0); add(g, G.dome, 0x5a7a5a, 0.42, 0.22, 0.42, 0, 0.34, 0); add(g, G.cyl6, 0x7a7a7a, 0.04, 0.3, 0.04, 0.16, 0.5, 0); }
     if (ty === "radio") {
       for (let k = 0; k < 3; k++) add(g, G.taper, 0xa8a8a8, 0.06 - k * 0.015, 0.6, 0.06 - k * 0.015, 0, 0.3 + k * 0.58, 0);
@@ -1346,7 +1347,7 @@ function renderTrain(s) {
     $("pre-summary").dataset.done = "1";
   }
   const b = s.brain;
-  const LBL = { safety: "Safety", warmth: "Shelter", fuel: "Firewood", water: "Water now", waterSource: "Water source", food: "Food now", farming: "Farming", power: "Power", growth: "Growth", crisisDamp: "Crisis focus", fieldsMult: "Fields", woodStock: "Wood kept", scrapStock: "Scrap kept", fireResponse: "Firefighting", repair: "Repairs", boilBias: "Boil water", coverPatch: "Patch greenhouses", coverBrace: "Brace greenhouses", coverGain: "Greenhouse value", waterCare: "Watering to need" };
+  const LBL = { safety: "Safety", warmth: "Shelter", fuel: "Firewood", water: "Water now", waterSource: "Water source", food: "Food now", farming: "Farming", power: "Power", growth: "Growth", crisisDamp: "Crisis focus", fieldsMult: "Fields", woodStock: "Wood kept", scrapStock: "Scrap kept", fireResponse: "Firefighting", repair: "Repairs", boilBias: "Boil water", coverPatch: "Patch greenhouses", coverBrace: "Brace greenhouses", coverGain: "Greenhouse value", waterCare: "Watering to need", frostCover: "Frost covers", storage: "Batteries" };
   $("brain-view").innerHTML = Object.entries(LBL).map(([k, l]) => `<div><label>${l}</label><span class="num">${typeof b[k] === "number" ? (b[k] >= 10 ? b[k].toFixed(0) : b[k].toFixed(2)) : "-"}</span></div>`).join("");
 }
 let training = null;
