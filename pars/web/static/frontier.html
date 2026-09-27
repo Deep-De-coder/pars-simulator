@@ -866,7 +866,8 @@ function renderHazards(s) {
     const keep = tk.value;
     tk.innerHTML = s.disasterTypes.map((d) => `<option value="${d.id}" ${d.possible ? "" : "disabled"}>${HZ_ICON[d.id] || ""} ${esc(d.name)}${d.possible ? "" : " (not here)"}</option>`).join("");
     tk.dataset.sig = sig;
-    if (keep) tk.value = keep;
+    const ok = s.disasterTypes.filter((d) => d.possible).map((d) => d.id);
+    tk.value = ok.includes(keep) ? keep : ok[0];
   }
   $("trigger").disabled = !s.running;
   // handbook section
@@ -940,8 +941,15 @@ function drawCurve(canvas, pts, keys) {
 }
 let myCurve = [];
 function renderTrain(s) {
-  const c = s.trained ? `<b>Veteran colony.</b> Started with ${s.knowledgeYears} simulated years of knowledge${s.trained ? " and trained decision weights" : ""}. Inherited lessons show as "Inherited" in the Handbook.`
-    : `<b>Novice colony.</b> Started with only the handbook, so it learns everything the hard way.`;
+  const place = FRONTIER_DATA.SCENARIOS[s.scenario.id].name;
+  let c;
+  if (currentChoice === "veteran") {
+    const v = colonyOf("veteran", s.scenario.id);
+    const bits = [v.parts.length ? `lessons: ${v.parts.map((p) => PART_LABEL[p] || p).join(", ")}` : null, v.brain ? `decision weights tuned for ${place}` : null].filter(Boolean);
+    c = bits.length ? `<b>Pre-trained veteran.</b> Here it brings ${bits.join("; ")}. Inherited lessons show as "Inherited" in the Handbook.`
+      : `<b>Pre-trained veteran</b>, but for ${place} training found nothing reliably better than the handbook, so it plays exactly like the novice.`;
+  } else if (currentChoice === "mine") c = `<b>Your trained colony.</b> ${s.knowledgeYears} simulated years of knowledge${currentGens ? ` and ${currentGens} generations of evolved decisions` : ""}, applied everywhere.`;
+  else c = `<b>Novice colony.</b> Started with only the handbook, so it learns everything the hard way.`;
   $("train-status").innerHTML = `${c}<div class="muted" style="margin-top:6px">Next new life: <b style="color:var(--ink)">${esc(colonyOf(colonyChoice).label)}</b> (choose in <i>New life…</i>).</div>`;
   if (PRE_META && !$("pre-summary").dataset.done && !$("tab-train").hidden) {
     const m = PRE_META, S = m.summary, V = m.validation || {};
@@ -957,7 +965,8 @@ function renderTrain(s) {
         <div class="muted">Tested: ${Object.entries(v.parts).map(([p, g]) => `${PART_LABEL[p] || p} ${sg(g.gain)}`).join(" · ")}</div>
         <div>Tuned decisions: ${v.brain.accepted ? `<span class="ok">accepted</span> (${sg(v.brain.gain)} ± ${v.brain.err.toFixed(1)} on validation)` : `<span class="muted">rejected (${sg(v.brain.gain)} ± ${v.brain.err.toFixed(1)}, not a reliable gain)</span>`}</div></div>`;
     }).join("");
-    $("pre-summary").innerHTML = `<div class="muted">Each place: every lesson is tested on its own against the novice (points per year, validation games); only helpful ones are kept. Decision weights are searched per place and must beat the defaults on validation games. The final numbers use ${m.evalSeeds} fresh seeds × normal and frequent disasters that played no part in any choice.</div>
+    const note = m.ruleChange ? `<div class="muted" style="border-left:3px solid var(--warn);padding-left:8px">${esc(m.ruleChange)} ${m.firstTest ? `On the first test the looser rule gave: veteran ${pct(m.firstTest.summary.veteran.thriving)} thriving vs novice ${pct(m.firstTest.summary.novice.thriving)}, but it lost in The River Rose.` : ""}</div>` : "";
+    $("pre-summary").innerHTML = note + `<div class="muted">Each place: every lesson is tested on its own against the novice (points per year, validation games); only helpful ones are kept. Decision weights are searched per place and must beat the defaults on validation games. The final numbers use ${m.evalSeeds} fresh seeds × normal and frequent disasters that played no part in any choice.</div>
       <div class="cmp"><b>Colony</b><b style="text-align:right">Thriving</b><b style="text-align:right">Perished</b><b style="text-align:right">Deaths/yr</b><b style="text-align:right">Score</b>
       ${row("Novice", S.novice)}${row("All knowledge, everywhere", S.allKnowledge)}${row("Veteran (selective)", S.veteran)}</div>${places}`;
     const curve = (TR.perPlace && TR.perPlace[state.scenario.id] && TR.perPlace[state.scenario.id].curve) || [];
@@ -1033,7 +1042,7 @@ $("banner-carry").onclick = () => {
   saveMine(mine); colonyChoice = "mine";
   openNew();
 };
-let currentKnowledge = null, currentBrain = null, currentGens = 0;
+let currentKnowledge = null, currentBrain = null, currentGens = 0, currentChoice = colonyChoice;
 
 function openNew() {
   const cur = state ? state.scenario.id : "river_flood";
@@ -1065,7 +1074,8 @@ $("newform").addEventListener("submit", (e) => {
     setPlaying(false);
     colonyChoice = (document.querySelector('input[name="colony"]:checked') || {}).value || colonyChoice;
     const col = colonyOf(colonyChoice, scen);
-    currentKnowledge = col.knowledge; currentBrain = col.brain; currentGens = col.gens || 0;
+    currentKnowledge = col.knowledge; currentBrain = col.brain; currentGens = col.gens || 0; currentChoice = colonyChoice;
+    $("pre-summary").dataset.done = "";
     state = game.new({ scenario: scen, seed: $("nd-seed").value, hazards: $("nd-hazards").value || "normal", brain: col.brain, knowledge: col.knowledge });
     selected = null; bannerSeen = -1; seenLog = state.log.length;
     buildWorld(state); render(); $("newdlg").close(); showTab("mind");

@@ -95,7 +95,24 @@ Set how often they strike (calm, normal, frequent, relentless) or **unleash** an
 **Training.** Learning also carries across lives:
 
 - *Remember what they learned & start again* at the end of a year: the next colony inherits every correction and lesson.
-- `node pars/web/static/frontier-train.js` lives many simulated years to build knowledge, then evolves the colony's 16 decision weights with a cross-entropy method (every candidate plays the same games), and finally compares novice, knowledge-only and trained colonies on seeds never used in training. The result ships as `frontier-brain.js`, the *Pre-trained veteran*.
+- `node pars/web/static/frontier-train.js` (parallel, about 20 minutes) builds the *Pre-trained veteran* in `frontier-brain.js`:
+  1. It lives 60 simulated years across all five places, each year inheriting the last one's knowledge.
+  2. For each place, it tests every piece of knowledge on its own against the novice, on the same validation games, and keeps a piece only with solid evidence (at least 2 standard errors).
+  3. For each place, it searches the colony's 16 decision weights with a cross-entropy method. Candidates are scored by their advantage over the defaults on identical games, and the result is kept only if it beats the defaults on separate validation games (again at 2 standard errors).
+  4. It reports results on fresh seeds that played no part in any of those choices.
+
+  Result on fresh seeds (48 years per place, normal and frequent disasters):
+
+  | Place | Novice (thrived/survived/perished) | Veteran | What training kept |
+  |---|---|---|---|
+  | The River Rose | 31/16/1 | 31/16/1 | nothing reliable |
+  | Ash Winter | 40/6/2 | 43/3/2 | tuned decisions |
+  | Dry Country | 14/34/0 | 14/34/0 | nothing reliable |
+  | After the Wave | 48/0/0 | 48/0/0 | nothing reliable |
+  | Red Planet | 8/24/16 | **31/8/9** | tuned decisions |
+  | **Overall** | 59% thriving, 8% perished | **70% thriving, 5% perished** | |
+
+  Honest notes: applying *all* knowledge everywhere barely helps (62% thriving), because lessons that help in one place hurt in another. For example, boiling water is worth +8 to +11 points a year in the flooded valley but −5 to −8 in Ash Winter, where firewood is precious. The first run, with a looser 1-standard-error bar, kept "boil water" for The River Rose and lost there on the test. The bar was raised to 2 standard errors and the numbers above come from a new set of fresh seeds. Earlier attempts also exposed planner bugs that are now fixed (accurate lessons overshooting, local soil effects learned as universal, power undervalued once real turbine output was known).
 - The **Training** tab shows those results and the training curve, and can keep training in the page (live 10 more years, or evolve 3 more generations). Your own colony is saved in the browser.
 
 **What you can do:** set a colony priority, or click a tile to order a field tilled, a crop planted or a structure built. Invalid orders are refused with the reason. Overriding the colony has consequences: pinning *Water* forever can starve everyone.

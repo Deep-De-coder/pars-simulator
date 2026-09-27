@@ -257,7 +257,9 @@
         const adv = r.map((v, i) => v - novice[i]);
         partGain[part] = { gain: mean(adv), err: stderr(adv) };
       }
-      let parts = Object.entries(partGain).filter(([, g]) => g.gain > 0.5 && g.gain > g.err).map(([p]) => p);
+      // keep a lesson only with solid evidence (2 standard errors); a 1-SE bar
+      // let a lucky lesson through that then lost on the untouched test
+      let parts = Object.entries(partGain).filter(([, g]) => g.gain > 0.5 && g.gain > 2 * g.err).map(([p]) => p);
       let K = filterKnowledge(k, parts, scenario);
       let kVal = 0, kErr = 0;
       if (K) {
