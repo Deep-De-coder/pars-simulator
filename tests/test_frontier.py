@@ -155,3 +155,19 @@ def test_knowledge_carries_over_between_games():
     """)
     assert res["years"] == 1 and res["trained"] is True
     assert res["minT"] >= res["fresh"]
+
+
+def test_training_improves_or_keeps_the_best_candidate():
+    res = run("""
+      const T = require(%s);
+      let last = null, gens = 0;
+      for (const s of T.trainBrain({generations: 2, pop: 3, elite: 2, perScenario: 1, seedBase: 123})) {
+        if (s.phase === 'generation') { gens++; last = s; }
+      }
+      const keys = Object.keys(T.SPACE);
+      const inRange = keys.every((k) => last.brain[k] >= T.SPACE[k][0] - 1e-9 && last.brain[k] <= T.SPACE[k][1] + 1e-9);
+      const k = T.drain(T.gatherKnowledge({years: 3})).knowledge;
+      console.log(JSON.stringify({gens, inRange, best: last.best.fitness, years: k.years}));
+    """ % json.dumps(str(STATIC / "frontier-train.js")))
+    assert res["gens"] == 2 and res["inRange"] and res["years"] == 3
+    assert res["best"] > 0

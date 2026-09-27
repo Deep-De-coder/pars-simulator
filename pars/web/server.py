@@ -147,9 +147,13 @@ def make_handler(game):
                            "application/javascript; charset=utf-8")
             elif self.path in ("/frontier", "/frontier.html"):
                 self._send(200, (STATIC / "frontier.html").read_bytes(), "text/html; charset=utf-8")
-            elif self.path in ("/frontier-data.js", "/frontier-engine.js", "/engine.js"):
-                self._send(200, (STATIC / self.path.lstrip("/")).read_bytes(),
-                           "application/javascript; charset=utf-8")
+            elif self.path in ("/frontier-data.js", "/frontier-engine.js", "/frontier-train.js",
+                               "/frontier-brain.js", "/engine.js"):
+                f = STATIC / self.path.lstrip("/")
+                if f.exists():
+                    self._send(200, f.read_bytes(), "application/javascript; charset=utf-8")
+                else:
+                    self._send(404, {"error": "Not found"})
             elif self.path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
             elif self.path == "/api/state":

@@ -130,6 +130,14 @@
   .scen label:has(input:checked) { border-color: var(--accent); }
   .scen small { color: var(--muted); display: block; }
   .err { color: var(--bad); font-size: 12px; min-height: 1em; }
+  canvas.chart { width: 100%; display: block; background: var(--panel-2); border-radius: 4px; }
+  .cmp { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: 2px 8px; font-size: 12px; }
+  .cmp b { font-weight: 500; color: var(--muted); font-size: 11px; }
+  .cmp .num { text-align: right; }
+  .hz { display: grid; gap: 3px; padding: 8px 10px; background: var(--panel-2); border-radius: 4px; font-size: 12px; }
+  .hz .head { display: flex; justify-content: space-between; gap: 8px; }
+  .hz .off { opacity: .55; }
+  .tabs button { padding: 10px 4px; font-size: 11px; }
   @media (max-width: 960px) {
     body { overflow: auto; grid-template-rows: auto auto; }
     main { grid-template-columns: 1fr; }
@@ -185,13 +193,19 @@
         <button data-priority="food">Food</button>
         <button data-priority="power">Power</button>
       </div>
+      <div class="pill-group" role="group" aria-label="Disasters">
+        <span>Disasters</span>
+        <select id="hazards" aria-label="How often disasters strike" title="How often disasters strike"></select>
+        <select id="trigger-kind" aria-label="Disaster to unleash"></select>
+        <button id="trigger" title="Start this disaster now">Unleash</button>
+      </div>
     </div>
     <div class="legend" id="legend"></div>
     <div class="toasts" id="toasts" aria-live="polite"></div>
     <div class="banner" id="banner" hidden><div>
       <h2 id="banner-title"></h2>
       <div id="banner-body" class="check"></div>
-      <div class="row"><button class="on" id="banner-new">Start a new life</button><button id="banner-close">Look around</button></div>
+      <div class="row"><button class="on" id="banner-carry" title="The next colony starts with everything this one learned">Remember what they learned &amp; start again</button><button id="banner-new">Start fresh</button><button id="banner-close">Look around</button></div>
     </div></div>
   </div>
   <aside>
@@ -200,6 +214,7 @@
       <button data-tab="book" role="tab">Handbook</button>
       <button data-tab="place" role="tab">Selected</button>
       <button data-tab="log" role="tab">Journal</button>
+      <button data-tab="train" role="tab">Training</button>
     </div>
     <div class="panel" id="tab-mind">
       <section>
@@ -233,6 +248,10 @@
         <div id="discoveries" class="check"></div>
       </section>
       <section>
+        <h3>Disasters <em>what the handbook says vs. experience</em></h3>
+        <div id="hazard-book" style="display:grid;gap:6px"></div>
+      </section>
+      <section>
         <h3>Crops <em>handbook vs. what we've learned</em></h3>
         <div id="crops" style="display:grid;gap:6px"></div>
       </section>
@@ -252,6 +271,34 @@
     <div class="panel" id="tab-log" hidden>
       <section><div class="log" id="log"></div></section>
     </div>
+    <div class="panel" id="tab-train" hidden>
+      <section>
+        <h3>This colony</h3>
+        <div id="train-status" style="font-size:13px"></div>
+      </section>
+      <section>
+        <h3>Pre-trained veteran <em id="pre-meta"></em></h3>
+        <div id="pre-summary" style="font-size:12px;display:grid;gap:6px"></div>
+        <canvas class="chart" id="pre-curve" height="120" aria-label="Training curve"></canvas>
+        <div class="muted" style="font-size:11px">Evolution of the colony's decision weights: score of the best and average candidate per generation, each playing the same games.</div>
+      </section>
+      <section>
+        <h3>Train it yourself <em>runs in this page</em></h3>
+        <div class="muted" style="font-size:12px">Train from the colony you'll start next (novice, veteran or your own). Knowledge: live simulated years and keep what they learn. Decisions: try variations of the colony's priorities and keep what scores best.</div>
+        <div class="row">
+          <button id="train-years">Live 10 simulated years</button>
+          <button id="train-brain">Evolve decisions (3 generations)</button>
+          <button id="train-stop" hidden>Stop</button>
+        </div>
+        <div class="track" style="height:6px"><div class="fill" id="train-progress" style="width:0;background:var(--learn)"></div></div>
+        <div id="train-log" class="log" style="max-height:180px;overflow:auto"></div>
+        <canvas class="chart" id="my-curve" height="100" aria-label="Your training curve" hidden></canvas>
+      </section>
+      <section>
+        <h3>Colony brain <em>decision weights</em></h3>
+        <div id="brain-view" class="stock" style="grid-template-columns:repeat(4,1fr)"></div>
+      </section>
+    </div>
   </aside>
 </main>
 
@@ -261,7 +308,9 @@
     <div class="scen" id="scen-list"></div>
     <div class="row">
       <label class="muted" style="font-size:12px;display:grid;gap:4px;flex:1">Seed (blank = random)<input id="nd-seed" inputmode="numeric" placeholder="random"></label>
+      <label class="muted" style="font-size:12px;display:grid;gap:4px;flex:1">Disasters<select id="nd-hazards"></select></label>
     </div>
+    <div class="scen" id="colony-list"></div>
     <div class="err" id="nd-err"></div>
     <div class="row"><button class="on" value="ok" id="nd-go">Start</button><button value="cancel" formnovalidate>Cancel</button></div>
   </form>
@@ -270,6 +319,8 @@
 <script src="/vendor/three.min.js"></script>
 <script src="/frontier-data.js"></script>
 <script src="/frontier-engine.js"></script>
+<script src="/frontier-train.js"></script>
+<script src="/frontier-brain.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -364,7 +415,7 @@ function buildWorld(s) {
 function tileSig(t) {
   const c = t.crop ? `${t.crop.type}${Math.min(4, Math.floor(t.crop.growth * 5))}${t.crop.ripe ? "r" : ""}${t.crop.health < 0.5 ? "s" : ""}` : "";
   const st = t.structure ? `${t.structure.type}${t.structure.ok === false ? "x" : ""}${t.structure.heater ? "h" : ""}${t.structure.panels || ""}` : "";
-  return [t.type, t.field, c, st, t.greenhouse, t.lights, t.raised, t.levee, t.irrigated, t.flood, t.type === "forest" ? Math.ceil(t.wood / 5) : ""].join("|");
+  return [t.type, t.field, c, st, t.greenhouse, t.lights, t.raised, t.levee, t.irrigated, t.flood, t.burning > 0, t.firebreak, t.crop && t.crop.blight, t.structure && t.structure.hp < 60, t.type === "forest" ? Math.ceil(t.wood / 5) : ""].join("|");
 }
 function add(parent, geo, color, sx, sy, sz, x, y, z, o) {
   const m = new THREE.Mesh(geo, mat(color, o)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); parent.add(m); return m;
@@ -389,13 +440,22 @@ function buildDeco(t) {
     for (let r = -1; r <= 1; r++) add(g, G.box, 0x4a3320, 0.85, 0.04, 0.12, 0, 0.02, r * 0.28);
     if (t.crop) {
       const stage = Math.min(1, t.crop.growth);
-      const col = t.crop.health < 0.5 ? 0x8a6a3a : t.crop.ripe ? 0xe8c547 : CROP_COLOR[t.crop.type] || 0x5faa4e;
+      const col = t.crop.blight ? 0x6a4a6a : t.crop.health < 0.5 ? 0x8a6a3a : t.crop.ripe ? 0xe8c547 : CROP_COLOR[t.crop.type] || 0x5faa4e;
       const size = 0.08 + stage * 0.22;
       for (let r = -1; r <= 1; r++) for (let c = -1; c <= 1; c++) {
         add(g, t.crop.type === "corn" || t.crop.type === "wheat" || t.crop.type === "sunflower" ? G.cone : G.sphere, col, size, size * (t.crop.type === "corn" || t.crop.type === "sunflower" ? 2.2 : 1), size, c * 0.28, 0.04 + size / 2, r * 0.28);
       }
     }
   }
+  if (t.firebreak && !t.field) add(g, G.box, 0x8a7a5a, 0.9, 0.02, 0.9, 0, 0.01, 0);
+  if (t.burning > 0) {
+    for (let i = 0; i < 5; i++) {
+      const f = add(g, G.cone, i % 2 ? 0xff7a1a : 0xffc23a, 0.18 + R(i) * 0.12, 0.35 + R(i + 2) * 0.35, 0.18, (R(i + 4) - 0.5) * 0.6, 0.25, (R(i + 6) - 0.5) * 0.6, { emissive: i % 2 ? 0xff4a00 : 0xffa000, emissiveIntensity: 1, transparent: true, opacity: 0.9 });
+      f.name = "flame"; f.userData.phase = R(i + 8) * 6;
+    }
+    for (let i = 0; i < 3; i++) { const sm = add(g, G.sphere, 0x4a4a4a, 0.35, 0.35, 0.35, (R(i) - 0.5) * 0.4, 0.8 + i * 0.35, (R(i + 1) - 0.5) * 0.4, { transparent: true, opacity: 0.45, depthWrite: false }); sm.name = "smoke"; sm.userData.phase = i / 3; }
+  }
+  if (t.structure && t.structure.hp < 60 && !t.burning) for (let i = 0; i < 2; i++) add(g, G.box, 0x3a3a3a, 0.5, 0.02, 0.03, (R(i) - 0.5) * 0.4, 0.62, (R(i + 3) - 0.5) * 0.4).rotation.y = R(i + 5) * 3;
   if (t.raised) for (const [dx, dz, sx, sz] of [[0, 0.46, 0.96, 0.06], [0, -0.46, 0.96, 0.06], [0.46, 0, 0.06, 0.96], [-0.46, 0, 0.06, 0.96]]) add(g, G.box, 0x8a5a2e, sx, 0.14, sz, dx, 0.07, dz);
   if (t.levee) for (const [dx, dz, sx, sz] of [[0, 0.47, 1, 0.08], [0, -0.47, 1, 0.08], [0.47, 0, 0.08, 1], [-0.47, 0, 0.08, 1]]) add(g, G.box, 0xa89a7a, sx, 0.22, sz, dx, 0.11, dz);
   if (t.irrigated) add(g, G.box, 0x4a9ad0, 0.08, 0.03, 0.96, 0.42, 0.03, 0);
@@ -454,6 +514,8 @@ function tileColor(t, s) {
   if (t.type === "field") c = lerpColor(0x5a4030, 0x7a5a38, t.fert);
   if (s.weather.temp < 0 && !["river", "lake"].includes(t.type) && !t.greenhouse && !s.scenario.sterile) c.lerp(new THREE.Color(0xe8eef2), Math.min(0.6, -s.weather.temp / 15));
   if (t.silt && t.flood === 0 && t.type !== "field") c.lerp(new THREE.Color(0x7a6a4a), 0.25);
+  if (t.charred > 0) c.lerp(new THREE.Color(0x1e1a18), Math.min(0.85, 0.35 + t.charred / 30));
+  if (t.burning > 0) c.lerp(new THREE.Color(0x5a2a10), 0.5);
   return c;
 }
 const LEGENDS = {
@@ -485,7 +547,7 @@ function syncPeople(s) {
     const t = s.tiles[p.y * s.W + p.x];
     const q = pos(p.x, p.y), n = group.length, a = (i / n) * Math.PI * 2, off = n > 1 ? 0.25 : 0;
     m.userData.goal = new THREE.Vector3(q.x + Math.cos(a) * off, topY(t) + (t.structure ? 0.02 : 0), q.z + Math.sin(a) * off);
-    m.getObjectByName("body").material.color.set(p.health > 60 ? 0x62b879 : p.health > 30 ? 0xe3a33b : 0xe0574f);
+    m.getObjectByName("body").material.color.set(p.sick ? 0xc8d04a : p.health > 60 ? 0x62b879 : p.health > 30 ? 0xe3a33b : 0xe0574f);
     m.getObjectByName("halo").visible = !!(selected && selected.kind === "person" && selected.id === p.id);
   });
   for (const [id, m] of people) if (!seen.has(id)) { peopleGroup.remove(m); people.delete(id); }
@@ -569,7 +631,14 @@ function animate(t) {
   });
   for (const m of people.values()) if (m.userData.goal) m.position.lerp(m.userData.goal, 1 - Math.pow(0.02, dt));
   const shimmer = 0.55 + Math.sin(t * 0.003) * 0.08;
-  decoGroup.traverse((o) => { if (o.name === "floodwater") o.material.opacity = shimmer; });
+  decoGroup.traverse((o) => {
+    if (o.name === "floodwater") o.material.opacity = shimmer;
+    else if (o.name === "flame") { const k = 0.75 + 0.35 * Math.sin(t * 0.012 + o.userData.phase); o.scale.y = o.userData.baseY ?? (o.userData.baseY = o.scale.y); o.scale.y = o.userData.baseY * k; }
+    else if (o.name === "smoke") { o.userData.phase = (o.userData.phase + dt * 0.25) % 1; o.position.y = 0.6 + o.userData.phase * 1.4; o.material.opacity = 0.45 * (1 - o.userData.phase); }
+  });
+  const quake = state && state.disaster && state.disaster.type === "earthquake";
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  world.position.set(quake && !reduce ? Math.sin(t * 0.05) * 0.06 * (state.disaster.daysLeft > 1 ? 1 : 0.4) : 0, 0, quake && !reduce ? Math.cos(t * 0.043) * 0.05 : 0);
   renderer.render(scene, camera);
 }
 
@@ -626,6 +695,8 @@ function render() {
   $("checklist").innerHTML = s.checklist.map((c) => `<div><span class="${c.ok ? "ok" : "no"}">${c.ok ? "✓" : "✗"}</span><div>${esc(c.label)}<small>${esc(c.detail)}</small></div></div>`).join("");
 
   renderBook(s);
+  renderHazards(s);
+  renderTrain(s);
   renderInspect(s);
   renderLog(s);
 
@@ -764,7 +835,8 @@ document.querySelectorAll("[data-overlay]").forEach((b) => b.onclick = () => { o
 document.querySelectorAll("[data-priority]").forEach((b) => b.onclick = () => act(() => game.command({ type: "priority", priority: b.dataset.priority })));
 function showTab(name) {
   document.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
-  ["mind", "book", "place", "log"].forEach((n) => { $(`tab-${n}`).hidden = n !== name; });
+  ["mind", "book", "place", "log", "train"].forEach((n) => { $(`tab-${n}`).hidden = n !== name; });
+  if (name === "train" && state) { renderTrain(state); if (myCurve.length) drawCurve($("my-curve"), myCurve, [["best", "#b58cf0", "best"], ["mean", "#62b879", "average"]]); }
 }
 document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
 document.addEventListener("click", (e) => {
@@ -781,11 +853,170 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === ".") step(1);
 });
 
+// ================================================================ disasters
+const HZ_ICON = { flood: "🌊", storm: "🌪", frost: "❄", drought: "☀", heatwave: "🔥", ashfall: "🌫", wildfire: "🔥", earthquake: "⛰", blight: "🍂", outbreak: "🤒" };
+const LESSON_KEY = { wildfire: "fireAware", earthquake: "quakeWait", blight: "mixCrops", outbreak: "boilWater", flood: "silt" };
+function renderHazards(s) {
+  const hz = $("hazards");
+  if (hz.options.length !== s.hazardLevels.length) hz.innerHTML = s.hazardLevels.map((l) => `<option value="${l}">${l[0].toUpperCase() + l.slice(1)}</option>`).join("");
+  hz.value = s.hazards;
+  const tk = $("trigger-kind");
+  const sig = s.disasterTypes.map((d) => d.id + d.possible).join();
+  if (tk.dataset.sig !== sig) {
+    const keep = tk.value;
+    tk.innerHTML = s.disasterTypes.map((d) => `<option value="${d.id}" ${d.possible ? "" : "disabled"}>${HZ_ICON[d.id] || ""} ${esc(d.name)}${d.possible ? "" : " (not here)"}</option>`).join("");
+    tk.dataset.sig = sig;
+    if (keep) tk.value = keep;
+  }
+  $("trigger").disabled = !s.running;
+  // handbook section
+  const seen = {};
+  for (const l of s.log) { const m = /^(.*) begins:/.exec(l.text); if (m) seen[m[1]] = (seen[m[1]] || 0) + 1; }
+  const hb = s.hazardBeliefs;
+  $("hazard-book").innerHTML = s.disasterTypes.map((d) => {
+    const g = s.hazardGuide[d.id];
+    const key = LESSON_KEY[d.id];
+    const learned = key === "silt" ? s.discoveries.silt : key ? hb[key] : false;
+    const extra = d.id === "wildfire" && hb.ashFertile ? " Also: ash makes burnt ground fertile." : "";
+    return `<div class="hz ${d.possible ? "" : "off"}">
+      <div class="head"><b>${HZ_ICON[d.id] || ""} ${esc(d.name)}</b><span class="muted">${d.possible ? (d.inScenario ? "can strike here" : "only if you unleash it") : "can't happen here"}${seen[d.name] ? ` · seen ${seen[d.name]}×` : ""}</span></div>
+      <div><span class="muted">Handbook:</span> ${esc(g.do)}</div>
+      ${g.learn ? `<div class="${learned ? "learned" : "muted"}" style="color:${learned ? "var(--learn)" : ""}">${learned ? "💡 Learned" : "Not learned yet"}: ${esc(g.learn)}${learned ? esc(extra) : ""}</div>` : ""}
+    </div>`;
+  }).join("") + (hb.learned.length ? `<div style="display:grid;gap:3px;font-size:12px">${hb.learned.map((l) => `<div style="color:var(--learn)">💡 ${esc(l)}</div>`).join("")}</div>` : "");
+}
+$("hazards").onchange = (e) => act(() => game.command({ type: "hazards", level: e.target.value }));
+$("trigger").onclick = () => act(() => game.command({ type: "disaster", kind: $("trigger-kind").value }));
+
+// ================================================================ colonies & training
+const STORE_KEY = "pars-frontier-mine-v1";
+function loadMine() { try { const v = JSON.parse(localStorage.getItem(STORE_KEY)); return v && v.knowledge ? v : null; } catch (e) { return null; } }
+function saveMine(v) { try { localStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch (e) { /* storage may be blocked; keep in memory */ } }
+const PRE = window.FRONTIER_TRAINED || null;
+let mine = loadMine();
+let colonyChoice = PRE ? "veteran" : "novice";
+function colonyOf(choice) {
+  if (choice === "veteran" && PRE) return { brain: PRE.brain, knowledge: PRE.knowledge, years: PRE.knowledge.years, gens: PRE.meta.generations, label: "Pre-trained veteran" };
+  if (choice === "mine" && mine) return { ...mine, label: "Your trained colony" };
+  return { brain: null, knowledge: null, years: 0, gens: 0, label: "Novice (handbook only)" };
+}
+function colonyBlurb(choice) {
+  const c = colonyOf(choice);
+  if (choice === "novice") return "Starts with only the handbook, mistakes and all. You'll watch it learn.";
+  return `${c.years} simulated years of knowledge${c.gens ? ` and ${c.gens} generations of evolved decisions` : ""}.`;
+}
+function pct(v) { return `${Math.round(v * 100)}%`; }
+function drawCurve(canvas, pts, keys) {
+  const g = canvas.getContext("2d");
+  const w = canvas.width = canvas.clientWidth * devicePixelRatio, h = canvas.height = (+canvas.getAttribute("height")) * devicePixelRatio;
+  g.clearRect(0, 0, w, h);
+  if (pts.length < 1) return;
+  const vals = pts.flatMap((p) => keys.map(([k]) => p[k]));
+  let lo = Math.min(...vals), hi = Math.max(...vals); if (hi - lo < 4) { lo -= 2; hi += 2; }
+  const pad = 22 * devicePixelRatio;
+  const X = (i) => pad + (pts.length === 1 ? 0.5 : i / (pts.length - 1)) * (w - pad * 1.5), Y = (v) => h - pad * 0.8 - (v - lo) / (hi - lo) * (h - pad * 1.4);
+  g.strokeStyle = "rgba(138,156,149,.25)"; g.lineWidth = 1; g.font = `${10 * devicePixelRatio}px IBM Plex Mono, monospace`; g.fillStyle = "#8a9c95";
+  for (const v of [lo, (lo + hi) / 2, hi]) { g.beginPath(); g.moveTo(pad, Y(v)); g.lineTo(w, Y(v)); g.stroke(); g.fillText(v.toFixed(0), 2, Y(v) + 3 * devicePixelRatio); }
+  for (const [k, color, label] of keys) {
+    g.strokeStyle = color; g.lineWidth = 2 * devicePixelRatio; g.beginPath();
+    pts.forEach((p, i) => (i ? g.lineTo(X(i), Y(p[k])) : g.moveTo(X(i), Y(p[k])))); g.stroke();
+    const lp = pts[pts.length - 1]; g.fillStyle = color; g.beginPath(); g.arc(X(pts.length - 1), Y(lp[k]), 3 * devicePixelRatio, 0, 7); g.fill();
+  }
+  let lx = pad; for (const [, color, label] of keys) { g.fillStyle = color; g.fillText(label, lx, 11 * devicePixelRatio); lx += (label.length + 3) * 6.5 * devicePixelRatio; }
+  g.fillStyle = "#8a9c95"; g.fillText("generation →", w - 90 * devicePixelRatio, h - 4 * devicePixelRatio);
+}
+let myCurve = [];
+function renderTrain(s) {
+  const c = s.trained ? `<b>Veteran colony.</b> Started with ${s.knowledgeYears} simulated years of knowledge${s.trained ? " and trained decision weights" : ""}. Inherited lessons show as "Inherited" in the Handbook.`
+    : `<b>Novice colony.</b> Started with only the handbook, so it learns everything the hard way.`;
+  $("train-status").innerHTML = `${c}<div class="muted" style="margin-top:6px">Next new life: <b style="color:var(--ink)">${esc(colonyOf(colonyChoice).label)}</b> (choose in <i>New life…</i>).</div>`;
+  if (PRE && !$("pre-summary").dataset.done && !$("tab-train").hidden) {
+    const m = PRE.meta, S = m.summary;
+    $("pre-meta").textContent = `${m.years} years · ${m.generations} generations`;
+    const row = (name, v) => `<div>${name}</div><div class="num">${pct(v.thriving)}</div><div class="num">${pct(v.perished)}</div><div class="num">${v.deaths.toFixed(2)}</div><div class="num">${v.score.toFixed(1)}</div>`;
+    $("pre-summary").innerHTML = `<div class="muted">Tested on ${m.evalSeeds} unseen seeds × 5 places × normal and frequent disasters (${m.evalSeeds * 10} years each):</div>
+      <div class="cmp"><b>Colony</b><b style="text-align:right">Thriving</b><b style="text-align:right">Perished</b><b style="text-align:right">Deaths/yr</b><b style="text-align:right">Score</b>
+      ${row("Novice", S.novice)}${row("+ knowledge", S.knowledgeOnly)}${row("+ trained decisions", S.trained)}</div>`;
+    drawCurve($("pre-curve"), m.curve, [["best", "#b58cf0", "best"], ["mean", "#62b879", "average"]]);
+    $("pre-summary").dataset.done = "1";
+  }
+  const b = s.brain;
+  const LBL = { safety: "Safety", warmth: "Shelter", fuel: "Firewood", water: "Water now", waterSource: "Water source", food: "Food now", farming: "Farming", power: "Power", growth: "Growth", crisisDamp: "Crisis focus", fieldsMult: "Fields", woodStock: "Wood kept", scrapStock: "Scrap kept", fireResponse: "Firefighting", repair: "Repairs", boilBias: "Boil water" };
+  $("brain-view").innerHTML = Object.entries(LBL).map(([k, l]) => `<div><label>${l}</label><span class="num">${typeof b[k] === "number" ? (b[k] >= 10 ? b[k].toFixed(0) : b[k].toFixed(2)) : "-"}</span></div>`).join("");
+}
+let training = null;
+function trainLog(msg) { const el = $("train-log"); el.insertAdjacentHTML("afterbegin", `<div>${esc(msg)}</div>`); }
+function runChunked(gen, onStep, onDone) {
+  let stop = false;
+  const tickOnce = () => {
+    if (stop) return onDone(true);
+    const t0 = performance.now();
+    while (performance.now() - t0 < 40) { const r = gen.next(); if (r.done) return onDone(false); onStep(r.value); }
+    setTimeout(tickOnce, 0);
+  };
+  setTimeout(tickOnce, 0);
+  return () => { stop = true; };
+}
+function startTraining(kind) {
+  if (training) return;
+  const base = colonyOf(colonyChoice);
+  const T = window.FRONTIER_TRAIN;
+  const seed = Math.floor(Math.random() * 1e6);
+  $("train-stop").hidden = false; $("train-years").disabled = $("train-brain").disabled = true;
+  $("train-progress").style.width = "0";
+  let result = { knowledge: base.knowledge, brain: base.brain, years: base.years || 0, gens: base.gens || 0 };
+  const finish = (stopped) => {
+    training = null; $("train-stop").hidden = true; $("train-years").disabled = $("train-brain").disabled = false;
+    mine = result; saveMine(mine); colonyChoice = "mine";
+    trainLog(`${stopped ? "Stopped. Kept what was learned so far." : "Done."} Your colony: ${mine.years} years, ${mine.gens} generations. It will be used for the next new life.`);
+    render();
+  };
+  if (kind === "years") {
+    const N = 10;
+    trainLog(`Living ${N} simulated years, starting from: ${base.label}…`);
+    training = runChunked(T.gatherKnowledge({ years: N, seedBase: seed, knowledge: base.knowledge, brain: base.brain }), (s) => {
+      result = { ...result, knowledge: s.knowledge, years: s.knowledge.years };
+      $("train-progress").style.width = `${(s.year / N) * 100}%`;
+      trainLog(`Year ${s.year}: ${FRONTIER_DATA.SCENARIOS[s.scenario].name}: ${s.outcome.toLowerCase()}`);
+    }, finish);
+  } else {
+    const G = 3, POP = 8;
+    myCurve = [];
+    $("my-curve").hidden = false;
+    trainLog(`Evolving decisions for ${G} generations × ${POP} candidates (each plays 5 years), starting from: ${base.label}…`);
+    training = runChunked(T.trainBrain({ generations: G, pop: POP, elite: 3, perScenario: 1, seedBase: seed, knowledge: base.knowledge, start: base.brain, sampleSeed: seed }), (s) => {
+      if (s.phase === "candidate") $("train-progress").style.width = `${(((s.generation - 1) * POP + s.done) / (G * POP)) * 100}%`;
+      else {
+        myCurve.push({ best: s.bestFitness, mean: s.meanFitness });
+        drawCurve($("my-curve"), myCurve, [["best", "#b58cf0", "best"], ["mean", "#62b879", "average"]]);
+        result = { ...result, brain: s.brain, gens: (base.gens || 0) + s.generation };
+        trainLog(`Generation ${s.generation}: best ${s.bestFitness.toFixed(1)}, average ${s.meanFitness.toFixed(1)}`);
+      }
+    }, finish);
+  }
+}
+$("train-years").onclick = () => startTraining("years");
+$("train-brain").onclick = () => startTraining("brain");
+$("train-stop").onclick = () => training && training();
+$("banner-carry").onclick = () => {
+  // this life's lessons on top of whatever the colony started with
+  const k = game.sim.exportKnowledge(currentKnowledge);
+  mine = { knowledge: k, brain: currentBrain, years: k.years, gens: currentGens };
+  saveMine(mine); colonyChoice = "mine";
+  openNew();
+};
+let currentKnowledge = null, currentBrain = null, currentGens = 0;
+
 function openNew() {
   const cur = state ? state.scenario.id : "river_flood";
   const LEVEL = { after_wave: "Gentle", ash_winter: "Gentle", river_flood: "Moderate", dry_country: "Moderate", red_planet: "Hard" };
   $("scen-list").innerHTML = Object.entries(FRONTIER_DATA.SCENARIOS).map(([id, sc]) => `<label><input type="radio" name="scen" value="${id}" ${id === cur ? "checked" : ""}>
     <div><b>${esc(sc.name)}</b> <span class="tag">${LEVEL[id] || ""}</span><small>${esc(sc.blurb)}</small><small><b style="color:var(--ink)">Needs:</b> ${esc(sc.needs)}</small></div></label>`).join("");
+  const choices = ["novice", ...(PRE ? ["veteran"] : []), ...(mine ? ["mine"] : [])];
+  if (!choices.includes(colonyChoice)) colonyChoice = choices[choices.length - 1];
+  $("colony-list").innerHTML = `<h3>Who goes?</h3>` + choices.map((c) => `<label><input type="radio" name="colony" value="${c}" ${c === colonyChoice ? "checked" : ""}>
+    <div><b>${esc(colonyOf(c).label)}</b><small>${esc(colonyBlurb(c))}</small></div></label>`).join("");
+  $("nd-hazards").innerHTML = FRONTIER_DATA ? Object.keys(FRONTIER_DATA.HAZARD_LEVELS).map((l) => `<option value="${l}" ${state && state.hazards === l ? "selected" : ""}>${l[0].toUpperCase() + l.slice(1)}</option>`).join("") : "";
   $("nd-err").textContent = "";
   $("newdlg").showModal();
 }
@@ -797,7 +1028,10 @@ $("newform").addEventListener("submit", (e) => {
   const scen = (document.querySelector('input[name="scen"]:checked') || {}).value || "river_flood";
   try {
     setPlaying(false);
-    state = game.new({ scenario: scen, seed: $("nd-seed").value });
+    colonyChoice = (document.querySelector('input[name="colony"]:checked') || {}).value || colonyChoice;
+    const col = colonyOf(colonyChoice);
+    currentKnowledge = col.knowledge; currentBrain = col.brain; currentGens = col.gens || 0;
+    state = game.new({ scenario: scen, seed: $("nd-seed").value, hazards: $("nd-hazards").value || "normal", brain: col.brain, knowledge: col.knowledge });
     selected = null; bannerSeen = -1; seenLog = state.log.length;
     buildWorld(state); render(); $("newdlg").close(); showTab("mind");
   } catch (err) { $("nd-err").textContent = err.message; }
@@ -805,7 +1039,9 @@ $("newform").addEventListener("submit", (e) => {
 
 (function boot() {
   resize();
-  game = FRONTIER.createFrontier({ scenario: "river_flood", seed: 7 });
+  const col = colonyOf(colonyChoice);
+  currentKnowledge = col.knowledge; currentBrain = col.brain; currentGens = col.gens || 0;
+  game = FRONTIER.createFrontier({ scenario: "river_flood", seed: 7, brain: col.brain, knowledge: col.knowledge });
   state = game.state();
   seenLog = 0;
   buildWorld(state); render();

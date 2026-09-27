@@ -76,6 +76,28 @@ A second mode about *what you need to survive anywhere*. Survivors arrive somewh
 
 **Learning.** The handbook is deliberately wrong in places (corn "survives light frost", beans "don't mind wet feet", potatoes "survive a hard frost", an optimistic sweet-potato yield, wells that "work anywhere", nameplate wind and solar output). The colony corrects these from what actually happens and shows each correction as a 💡 note, and it discovers things the handbook never mentioned, such as flood silt making land more fertile. Skills also improve with practice.
 
+**Disasters.** Ten kinds, each with its own mechanics, a handbook response and, for most, a lesson the colony can only learn by living through it:
+
+| Disaster | What happens | Handbook response | Learned from experience |
+|---|---|---|---|
+| Flood | River rises over low ground | High ground, sandbags, harvest early | Flood silt makes land fertile |
+| Storm | Wind and rain wreck exposed structures | Shelter, repair afterwards | |
+| Cold snap | Temperatures plunge | Fires, greenhouses | Each crop's real cold limit |
+| Drought / heatwave | No rain, extra thirst | Ration, wells in low ground, irrigate | |
+| Ashfall | Sun blotted out | Stores, wind and water power | |
+| Wildfire | Spreads by wind, dryness and fuel; rain stops it | Fight with water, cut firebreaks | Firebreak ring before dry season; ash is fertile |
+| Earthquake | Cracks buildings, collapses wells; aftershocks | Repair | Wait for aftershocks before rebuilding |
+| Crop blight | Fungus jumps plant to plant | Pull infected plants | Mix crops (it spreads along one crop) |
+| Fever outbreak | Spreads between people; worse after dirty water | Rest the sick | Always boil drinking water |
+
+Set how often they strike (calm, normal, frequent, relentless) or **unleash** any disaster yourself from the Disasters control.
+
+**Training.** Learning also carries across lives:
+
+- *Remember what they learned & start again* at the end of a year: the next colony inherits every correction and lesson.
+- `node pars/web/static/frontier-train.js` lives many simulated years to build knowledge, then evolves the colony's 16 decision weights with a cross-entropy method (every candidate plays the same games), and finally compares novice, knowledge-only and trained colonies on seeds never used in training. The result ships as `frontier-brain.js`, the *Pre-trained veteran*.
+- The **Training** tab shows those results and the training curve, and can keep training in the page (live 10 more years, or evolve 3 more generations). Your own colony is saved in the browser.
+
 **What you can do:** set a colony priority, or click a tile to order a field tilled, a crop planted or a structure built. Invalid orders are refused with the reason. Overriding the colony has consequences: pinning *Water* forever can starve everyone.
 
 The Frontier engine is JavaScript only (`pars/web/static/frontier-*.js`), so it runs in the browser. `tests/test_frontier.py` drives it through Node.

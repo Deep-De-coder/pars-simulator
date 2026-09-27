@@ -677,7 +677,7 @@
       u.fuel = cold && woodDays < 6 ? clamp((6 - woodDays) / 6, 0.2, 0.9) : 0;
       u.water = waterNet >= 0 ? (waterDays < 2 ? 0.4 : 0.05) : clamp((8 - waterDays) / 8, 0.15, 1);
       u.waterSource = waterNet < 0 ? clamp(0.45 + (-waterNet / pop) * 0.4, 0.45, 0.9) : 0;
-      u.food = clamp((18 - foodDays) / 18, 0, 1);
+      u.food = clamp((21 - foodDays) / 18, 0, 1);
       u.farming = clamp(1 - prodRate / pop, 0, 1) * (foodDays < 60 ? 1 : 0.5);
       u.power = powerNeed > this.power.produced + 0.5 ? clamp(0.35 + (powerNeed - this.power.produced) * 0.08, 0.35, 0.85) : (this.power.produced === 0 ? 0.2 : 0.05);
       u.growth = this.sc.noRadio ? 0 : pop < 8 && foodDays > 20 && waterNet >= 0 ? 0.25 : 0.05;
@@ -972,7 +972,7 @@
       // Rule of threes: while safety, warmth or water is urgent, long-term
       // work (farming, power, growth, stockpiling) waits.
       // Food joins the survival tier once supplies are down to about a week.
-      const hungry = u.food > 0.6;
+      const hungry = u.food > 0.5;
       const crisis = Math.max(u.safety, u.warmth, u.water > 0.55 ? u.water : 0, hungry ? u.food * 0.9 : 0);
       if (crisis > 0) {
         for (const c of C) {
@@ -1063,7 +1063,9 @@
       for (const s of this.alive) if (s.task) taken.add(`${s.task.x},${s.task.y}`);
       // each person takes the best remaining option, weighted by their skill
       for (const s of people) {
-        if (s.health < 25 || s.sick) { s.task = { kind: "rest", x: this.home.x, y: this.home.y, work: 1 }; s.status = s.sick ? "Sick with fever" : "Resting to recover"; assignments.push({ name: s.name, label: s.sick ? "Rest (fever)" : "Rest (injured)" }); continue; }
+        // resting heals nothing if there's no food: the starving must keep foraging
+        const starving = this.inv.food < this.alive.length;
+        if ((s.health < 25 && !starving) || s.sick) { s.task = { kind: "rest", x: this.home.x, y: this.home.y, work: 1 }; s.status = s.sick ? "Sick with fever" : "Resting to recover"; assignments.push({ name: s.name, label: s.sick ? "Rest (fever)" : "Rest (injured)" }); continue; }
         let best = null, bestScore = 0;
         for (const c of C) {
           if (!c.task || c.blocked) continue;

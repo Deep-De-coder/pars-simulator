@@ -42,13 +42,18 @@ def build_frontier(inline_three=False, fragment=False):
     html = (STATIC / "frontier.html").read_text(encoding="utf-8")
     data = (STATIC / "frontier-data.js").read_text(encoding="utf-8")
     engine = (STATIC / "frontier-engine.js").read_text(encoding="utf-8")
+    train = (STATIC / "frontier-train.js").read_text(encoding="utf-8")
+    brain_file = STATIC / "frontier-brain.js"
+    brain = brain_file.read_text(encoding="utf-8") if brain_file.exists() else ""
     if inline_three:
         three_tag = "<script>" + (STATIC / "vendor" / "three.min.js").read_text(encoding="utf-8") + "</script>"
     else:
         three_tag = f'<script src="{THREE_CDN}"></script>'
     for tag, repl in ((THREE_TAG, three_tag),
                       ('<script src="/frontier-data.js"></script>', f"<script>{data}</script>"),
-                      ('<script src="/frontier-engine.js"></script>', f"<script>{engine}</script>")):
+                      ('<script src="/frontier-engine.js"></script>', f"<script>{engine}</script>"),
+                      ('<script src="/frontier-train.js"></script>', f"<script>{train}</script>"),
+                      ('<script src="/frontier-brain.js"></script>', f"<script>{brain}</script>" if brain else "")):
         assert tag in html, f"frontier.html no longer contains {tag}"
         html = html.replace(tag, repl)
     return _fragment(html) if fragment else html
