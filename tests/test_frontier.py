@@ -201,6 +201,21 @@ def test_colony_beliefs_get_closer_to_the_truth():
 
 
 
+
+def test_fitting_a_structure_that_was_destroyed_mid_job_refunds_materials():
+    # A heater (or grow lights) finishing after its shelter (or greenhouse)
+    # was destroyed used to crash the engine.
+    res = run("""
+      const f = new F.Frontier({scenario: 'ash_winter', seed: 1});
+      const t = f.tiles.find((x) => f.freeLand(x));
+      const s = f.alive[0];
+      const wire = f.inv.wire;
+      f.finishTask(s, t, {kind: 'build', tech: 'heater', x: t.x, y: t.y, req: {wire: 1}});
+      f.finishTask(s, t, {kind: 'build', tech: 'grow_lights', x: t.x, y: t.y, req: {wire: 1}});
+      console.log(JSON.stringify({wireBack: f.inv.wire - wire, lights: !!t.lights, structure: t.structure}));
+    """)
+    assert res == {"wireBack": 2, "lights": False, "structure": None}
+
 def test_facts_backed_by_evidence_are_mostly_right():
     # "Tested" facts are ones the colony had evidence for (a frost below the
     # limit, a flood over the crop, enough digs or catches). Those should be

@@ -1523,6 +1523,14 @@
           return;
         }
         if (id === "greenhouse") { t.greenhouse = true; this.note("build", `${s.name} covered (${t.x},${t.y}) with a greenhouse.`); return; }
+        // the thing we were fitting may have burned, flooded or blown away
+        // mid-job: put the materials back rather than build on nothing
+        const gone = (id === "heater" && !(t.structure && t.structure.type === "shelter")) || (id === "grow_lights" && !t.greenhouse);
+        if (gone) {
+          for (const [k, v] of Object.entries(task.req || {})) this.inv[k] += v;
+          this.note("event", `${s.name} couldn't finish the ${tech.name.toLowerCase()} at (${t.x},${t.y}): what it was for is gone.`);
+          return;
+        }
         if (id === "grow_lights") { t.lights = true; this.note("build", `Grow lights installed at (${t.x},${t.y}).`); return; }
         if (id === "raised_bed") { t.raised = true; return; }
         if (id === "irrigation") { t.irrigated = true; this.note("build", `Irrigation channel dug to (${t.x},${t.y}).`); return; }
