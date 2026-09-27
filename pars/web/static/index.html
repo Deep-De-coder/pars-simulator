@@ -285,7 +285,20 @@ let selected = null;   // {kind:'survivor', id} | {kind:'cell', x,y,z}
 let bannerDismissedTurn = -1;
 
 // ------------------------------------------------------------------ API
+// Standalone builds (python -m pars.web.build) embed engine.js and run the
+// simulation in the page; otherwise we talk to the Python server.
+const STANDALONE = window.PARS_STANDALONE === true && !!window.PARS;
+let localGame = null;
+function localApi(path, body) {
+  if (!localGame) localGame = window.PARS.createGame({ seed: 42 });
+  if (path === "/api/state") return localGame.state();
+  if (path === "/api/step") return localGame.step(body.n);
+  if (path === "/api/command") return localGame.command(body);
+  if (path === "/api/new") return localGame.new(body);
+  throw new Error("Unknown request " + path);
+}
 async function api(path, body) {
+  if (STANDALONE) return localApi(path, body || {});
   const res = await fetch(path, body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });

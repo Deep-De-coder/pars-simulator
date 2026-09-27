@@ -48,6 +48,8 @@ The three levels are drawn as stacked slabs you can orbit (drag) and zoom (scrol
   - **Doctrine** can be switched mid-game.
 - Disasters show as particles on the levels they hit. Your orders appear in the coordinator log.
 
+**No install needed:** `python -m pars.web.build pars-3d.html --inline-three` writes one self-contained HTML file you can open by double-clicking or host anywhere. It runs a JavaScript port of the engine (`pars/web/static/engine.js`) in the page. The Python package stays the reference implementation; `tests/test_js_engine.py` checks the port's win rate against it (they matched within noise over 600–1000 games per difficulty).
+
 Pinned survivors still flee danger, and the orders are the same commands the Python API exposes (`Simulation.set_focus`, `evacuate`, `pin_role`, `set_doctrine`).
 
 ## How a turn works
