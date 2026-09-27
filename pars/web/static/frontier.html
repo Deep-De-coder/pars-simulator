@@ -1107,11 +1107,12 @@ function renderAccuracy(s) {
   const GN = { crops: "Crops", wells: "Wells", yields: "Gathering", lessons: "Disaster lessons" };
   $("accuracy").innerHTML = `<div style="display:flex;align-items:baseline;gap:10px"><b style="font-size:22px;color:var(--ink)">${Math.round(a.pct * 100)}%</b>
       <span class="muted">${a.ok} of ${a.total} facts right · started at ${Math.round(s.startAccuracy)}% with only the handbook</span></div>
+    <div class="muted">Of the ${a.tested} facts they have real evidence for, <b style="color:var(--ink)">${a.tested ? Math.round(a.testedPct * 100) : "–"}%</b> are right. The rest can only be learned when it happens: a frost, a flood, enough wells dug.</div>
     <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:60px;background:rgba(255,255,255,.03);border-radius:6px" preserveAspectRatio="none">
       <line x1="0" x2="${w}" y1="${h - s.startAccuracy / 100 * h}" y2="${h - s.startAccuracy / 100 * h}" stroke="#666" stroke-dasharray="3 3"/>
       <polyline points="${pts}" fill="none" stroke="var(--learn)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
-    ${Object.entries(groups).map(([g, fs]) => `<details><summary><b>${GN[g] || g}</b> <span class="muted">${fs.filter((f) => f.ok).length}/${fs.length} right</span></summary>
-      <table style="width:100%;border-collapse:collapse;margin-top:4px">${fs.map((f) => `<tr><td style="padding:2px 0">${f.ok ? "<span class='ok'>✓</span>" : "<span style='color:var(--bad)'>✗</span>"} ${esc(f.name)}</td>
+    ${Object.entries(groups).map(([g, fs]) => `<details><summary><b>${GN[g] || g}</b> <span class="muted">${fs.filter((f) => f.ok).length}/${fs.length} right${fs.some((f) => !f.tested) ? ` · ${fs.filter((f) => !f.tested).length} not tested yet` : ""}</span></summary>
+      <table style="width:100%;border-collapse:collapse;margin-top:4px">${fs.map((f) => `<tr title="${f.tested ? "we have evidence for this" : "not tested yet"}"><td style="padding:2px 0">${f.ok ? "<span class='ok'>✓</span>" : f.tested ? "<span style='color:var(--bad)'>✗</span>" : "<span class='muted'>?</span>"} ${esc(f.name)}</td>
       <td class="muted" style="text-align:right">we think <b style="color:var(--ink)">${esc(String(f.belief))}</b></td><td class="muted" style="text-align:right;padding-left:8px">truth ${esc(String(f.truth))}</td></tr>`).join("")}</table></details>`).join("")}`;
   const Y = Object.values(s.yieldBook).filter((y) => y.seen > 0);
   $("yieldbook").innerHTML = Y.length ? Y.map((y) => {

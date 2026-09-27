@@ -244,6 +244,7 @@
       if (this.sc.opening) {
         const o = this.sc.opening;
         this.disaster = { type: o.type, daysLeft: o.days, level: o.level || 2 };
+        this.lived = { [o.type]: true };
         this.note("event", `${DISASTERS[o.type].name}: ${DISASTERS[o.type].desc}`);
       }
       this.dirtyWaterDay = -99;
@@ -352,6 +353,7 @@
     startDisaster(type, forced = false) {
       const d = DISASTERS[type];
       this.disaster = { type, daysLeft: this.R.randint(d.days[0], d.days[1]), level: this.R.randint(1, 3), forced, startDay: this.day };
+      (this.lived = this.lived || {})[type] = true;
       this.note("event", `${d.name} begins: ${d.desc}`);
       if (type === "earthquake") this.quake(1);
       if (type === "wildfire") {
@@ -551,12 +553,17 @@
         const truth = CROPS[crop.type], belief = this.beliefs.crops[crop.type];
         const temp = this.cropTemp(t, w.temp);
         crop.age++;
+        // what this crop has been exposed to (to tell "untested" from "wrong")
+        belief.lowT = Math.min(belief.lowT ?? 99, temp);
+        if (t.flood > 0) belief.wet = true;
         // frost kill
         if (temp <= truth.frostKill) { this.cropDies(t, "frost", temp); continue; }
         // drowning
         if (t.flood > 0 && !truth.flood) {
           crop.health -= 0.25 * t.flood;
           if (crop.health <= 0) { this.cropDies(t, "flood"); continue; }
+          // it doesn't have to die for us to see it suffering
+          if (belief.flood && crop.health < 0.6) { belief.flood = false; this.learn(crop.type, `${truth.name} wilts in standing floodwater (the handbook was wrong).`); }
         }
         if (t.flood > 0 && truth.flood && belief.flood !== true) { belief.flood = true; this.learn(crop.type, `${truth.name} survived standing floodwater.`); }
         const light = (t.lights && t.powered) ? 1 : (t.greenhouse ? 0.9 : 1) * clamp(w.sun * 1.3, 0.15, 1);
@@ -1149,32 +1156,42 @@
     }
     knowledgeAccuracy() {
       const facts = [];
-      const fact = (group, name, ok, belief, truth) => facts.push({ group, name, ok: !!ok, belief, truth });
+      // "tested": the colony has had some experience that bears on the fact
+      // (planted the crop, dug at that height, lived through the disaster);
+      // an untested fact can only be right if the handbook happened to be
+      const fact = (group, name, ok, belief, truth, tested) => facts.push({ group, name, ok: !!ok, belief, truth, tested: !!tested });
+      const lived = this.lived || {};
       // crops the colony has or has grown
       for (const [id, b] of Object.entries(this.beliefs.crops)) {
         if (!((this.seeds[id] || 0) > 0 || b.planted)) continue;
         const t = CROPS[id];
-        fact("crops", `${t.name}: grows above`, Math.abs(b.minT - t.minT) <= 1, `${b.minT} °C`, `${t.minT} °C`);
-        fact("crops", `${t.name}: frost kills at`, Math.abs(b.frostKill - t.frostKill) <= 1.5, `${b.frostKill} °C`, `${t.frostKill} °C`);
-        fact("crops", `${t.name}: survives floods`, b.flood === t.flood, b.flood ? "yes" : "no", t.flood ? "yes" : "no");
+        fact("crops", `${t.name}: grows above`, Math.abs(b.minT - t.minT) <= 1, `${b.minT} °C`, `${t.minT} °C`, (b.lowT ?? 99) < t.minT);
+        fact("crops", `${t.name}: frost kills at`, Math.abs(b.frostKill - t.frostKill) <= 1.5, `${b.frostKill} °C`, `${t.frostKill} °C`, (b.lowT ?? 99) <= Math.max(t.frostKill, b.frostKill));
+        fact("crops", `${t.name}: survives floods`, b.flood === t.flood, b.flood ? "yes" : "no", t.flood ? "yes" : "no", b.wet);
       }
       // wells at the heights that exist here
       if (!this.sc.terrain.sterile) {
         const elevs = [...new Set(this.tiles.filter((t) => this.isLand(t)).map((t) => t.elev))].sort();
         for (const e of elevs) {
           const w = this.beliefs.tech.well.byElev[e], bel = w.ok / (w.ok + w.fail), tru = this.trueWellChance(e);
-          fact("wells", `Well at height ${e} strikes water`, Math.abs(bel - tru) <= 0.15, `${Math.round(bel * 100)}%`, `${Math.round(tru * 100)}%`);
+          const r = this.beliefs.tech.well.real;
+          fact("wells", `Well at height ${e} strikes water`, Math.abs(bel - tru) <= 0.15, `${Math.round(bel * 100)}%`, `${Math.round(tru * 100)}%`, r && r[e].ok + r[e].fail >= 4);
         }
       }
       // gathering yields that apply here
       const Y = this.beliefs.yields;
-      const yf = (key, truth, tol) => fact("yields", YIELD_LABEL[key], Math.abs(Y[key].m - truth) <= tol, Y[key].m.toFixed(2), truth.toFixed(2));
+      // enough tries that an honest average would land within the tolerance
+      const enough = (key, truth, tol) => { const y = Y[key], n = y.seen || 0; if (n < 2) return false;
+        const v = truth < 1 ? truth * (1 - truth) : (y.M2 || 0) / (n - 1); return 2 * Math.sqrt(v / n) <= tol; };
+      const yf = (key, truth, tol) => fact("yields", YIELD_LABEL[key], Math.abs(Y[key].m - truth) <= tol, Y[key].m.toFixed(2), truth.toFixed(2), enough(key, truth, tol));
       if (!this.sc.noWildFood) {
-        // in the desert the nearest spot may be sand (half yield) or oasis grass
-        const lo = this.scenarioId === "dry_country" ? 0.5 : 1;
-        for (const [sea, base] of [["Spring", 2.5], ["Summer", 2.5], ["Autumn", 4], ["Winter", 1]]) {
-          const m = Y[`forage_${sea}`].m, tol = Math.max(0.5, base * 0.25);
-          fact("yields", YIELD_LABEL[`forage_${sea}`], m >= base * lo - tol && m <= base + tol, m.toFixed(2), lo < 1 ? `${(base * lo).toFixed(2)}–${base.toFixed(2)}` : base.toFixed(2));
+        // where there's sand the nearest spot may be sand (half yield) or grass
+        const lo = this.tiles.some((t) => t.type === "sand") ? 0.5 : 1;
+        // what a day's foraging actually brings in (whole portions) at skill 1
+        for (const [sea, raw] of [["Spring", 2.5], ["Summer", 2.5], ["Autumn", 4], ["Winter", 1]]) {
+          const hi = Math.round(raw), low = lo < 1 ? Math.round(raw * lo) : hi;
+          const m = Y[`forage_${sea}`].m, tol = Math.max(0.5, hi * 0.25);
+          fact("yields", YIELD_LABEL[`forage_${sea}`], m >= low - tol && m <= hi + tol, m.toFixed(2), low < hi ? `${low.toFixed(2)}–${hi.toFixed(2)}` : hi.toFixed(2), enough(`forage_${sea}`, hi, tol));
         }
       }
       if (this.sc.terrain.river) yf("fish_river", 2, 0.5);
@@ -1186,10 +1203,11 @@
       // disaster lessons for disasters that can strike here
       const LES = { boilWater: "outbreak", fireAware: "wildfire", quakeWait: "earthquake", mixCrops: "blight", ashFertile: "wildfire" };
       const LNAME = { boilWater: "Unboiled water spreads fever", fireAware: "Firebreaks before dry season", quakeWait: "Wait out aftershocks", mixCrops: "Mix crops against blight", ashFertile: "Ash makes soil fertile" };
-      for (const [k, d] of Object.entries(LES)) if (d in this.sc.disasters && this.canHappen(d)) fact("lessons", LNAME[k], this.beliefs.hazard[k], this.beliefs.hazard[k] ? "known" : "not yet", "true");
-      if (this.sc.terrain.river) fact("lessons", "Flood silt is fertile", this.discoveries.silt, this.discoveries.silt ? "known" : "not yet", "true");
+      for (const [k, d] of Object.entries(LES)) if (d in this.sc.disasters && this.canHappen(d)) fact("lessons", LNAME[k], this.beliefs.hazard[k], this.beliefs.hazard[k] ? "known" : "not yet", "true", this.beliefs.hazard[k]);
+      if (this.sc.terrain.river) fact("lessons", "Flood silt is fertile", this.discoveries.silt, this.discoveries.silt ? "known" : "not yet", "true", this.discoveries.silt);
       const ok = facts.filter((f) => f.ok).length;
-      return { pct: facts.length ? ok / facts.length : 1, ok, total: facts.length, facts };
+      const T = facts.filter((f) => f.tested), tok = T.filter((f) => f.ok).length;
+      return { pct: facts.length ? ok / facts.length : 1, ok, total: facts.length, facts, tested: T.length, testedOk: tok, testedPct: T.length ? tok / T.length : 1 };
     }
     gatherOption(res, amt) {
       const T = this.tiles.filter((t) => !this.reserved(t) && t.flood === 0);
@@ -1706,7 +1724,7 @@
       },
       discoveries: { ...f.discoveries },
       hazardBeliefs: { ...f.beliefs.hazard },
-      accuracy: (() => { const a = f.knowledgeAccuracy(); return { pct: a.pct, ok: a.ok, total: a.total, facts: a.facts }; })(),
+      accuracy: (() => { const a = f.knowledgeAccuracy(); return a; })(),
       accuracyLog: (f.accuracyLog || []).slice(),
       startAccuracy: f.startAccuracy,
       yieldBook: Object.fromEntries(Object.entries(f.beliefs.yields).map(([k, b]) => [k, { label: YIELD_LABEL[k], belief: Math.round(b.m * 100) / 100, handbook: HANDBOOK_YIELDS[k], seen: b.seen || 0 }])),

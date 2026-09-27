@@ -200,6 +200,27 @@ def test_colony_beliefs_get_closer_to_the_truth():
         assert r["life4"] > r["life1"], (sc, r)
 
 
+
+def test_facts_backed_by_evidence_are_mostly_right():
+    # "Tested" facts are ones the colony had evidence for (a frost below the
+    # limit, a flood over the crop, enough digs or catches). Those should be
+    # right; untested ones can only be right if the handbook was.
+    res = run("""
+      let tested = 0, ok = 0, untestedLessons = 0;
+      for (const sc of ['river_flood', 'ash_winter', 'after_wave']) for (let s = 0; s < 4; s++) {
+        const f = new F.Frontier({scenario: sc, seed: 900 + s});
+        while (f.running) f.tick();
+        const a = f.knowledgeAccuracy();
+        tested += a.tested; ok += a.testedOk;
+        untestedLessons += a.facts.filter((x) => x.group === 'lessons' && !x.tested && x.ok).length;
+      }
+      console.log(JSON.stringify({tested, ok, untestedLessons}));
+    """)
+    assert res["tested"] >= 10, res
+    assert res["ok"] / res["tested"] >= 0.8, res
+    assert res["untestedLessons"] == 0, res
+
+
 def test_yield_book_learns_from_experience_and_wells_learn_a_rule():
     res = run("""
       const f = new F.Frontier({scenario: 'river_flood', seed: 3});
