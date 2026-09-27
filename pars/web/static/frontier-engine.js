@@ -19,7 +19,14 @@
 (function (root) {
   "use strict";
   const D = (typeof module !== "undefined" && module.exports) ? require("./frontier-data.js") : root.FRONTIER_DATA;
-  const { CROPS, HANDBOOK_CROPS, TECHNIQUES, SCENARIOS, DISASTERS, RULE_OF_THREES } = D;
+  const { CROPS, HANDBOOK_CROPS, TECHNIQUES, SCENARIOS, DISASTERS, RULE_OF_THREES, HAZARD_GUIDE, HAZARD_LEVELS } = D;
+
+  // The colony's decision weights. Hand-set defaults; frontier-train.js
+  // evolves better ones by playing many simulated years.
+  const DEFAULT_BRAIN = {
+    safety: 1, warmth: 1, fuel: 1, water: 1, waterSource: 1, food: 1, farming: 1, power: 1, growth: 1,
+    crisisDamp: 0.65, fieldsMult: 0.9, woodStock: 6, scrapStock: 6, fireResponse: 1, repair: 1, boilBias: 1,
+  };
 
   const YEAR = 360;
   const SEASONS = ["Spring", "Summer", "Autumn", "Winter"];
@@ -49,7 +56,12 @@
 
   // ================================================================ world
   class Frontier {
-    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12 } = {}) {
+    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null } = {}) {
+      if (!(hazards in HAZARD_LEVELS)) throw new Error(`Unknown hazard level ${hazards}`);
+      this.hazards = hazards;
+      this.hazardMult = HAZARD_LEVELS[hazards];
+      this.brain = { ...DEFAULT_BRAIN, ...(brain || {}) };
+      this.trained = !!(brain || knowledge);
       if (!SCENARIOS[scenario]) throw new Error(`Unknown scenario ${scenario}`);
       width = +width; height = +height;
       if (!(width >= 8 && width <= 24 && height >= 8 && height <= 20)) throw new Error("Map must be 8-24 wide and 8-20 tall");
@@ -75,6 +87,7 @@
       this.water = { produced: 0 };
       this.discoveries = {};
       this.initBeliefs();
+      if (knowledge) this.applyKnowledge(knowledge);
       this.genMap();
       this.initWeather();
       this.survivors = [];
@@ -107,6 +120,7 @@
       for (const [id, c] of Object.entries(HANDBOOK_CROPS)) {
         this.beliefs.crops[id] = { ...c, yieldFactor: 1, planted: 0, harvested: 0, lost: 0, learned: [], coldDays: 0 };
       }
+      this.beliefs.hazard = { fireAware: false, quakeWait: false, mixCrops: false, boilWater: false, ashFertile: false, learned: [] };
       this.beliefs.tech = {
         well: { byElev: [0, 1, 2, 3, 4].map(() => ({ ok: 4, fail: 1 })), learned: [] }, // prior ~0.8 everywhere
         wind_turbine: { output: 5, samples: 0, learned: [] },
@@ -213,6 +227,7 @@
         this.disaster = { type: o.type, daysLeft: o.days, level: o.level || 2 };
         this.note("event", `${DISASTERS[o.type].name}: ${DISASTERS[o.type].desc}`);
       }
+      this.dirtyWaterDay = -99;
       for (let i = 0; i < 4; i++) this.forecast.push(this.rollWeather(this.dayOfYear + i));
       this.weather = this.forecast.shift();
     }
@@ -227,10 +242,18 @@
       // forecast is honest
       let event = null;
       if (!this.disaster && !this.forecast.some((f) => f.event)) {
-        for (const [type, p] of Object.entries(this.sc.disasters)) {
-          const seasonal = type === "frost" ? (Math.sin(((doy - 45) / YEAR) * 2 * Math.PI) < -0.3 ? 2.5 : 0.3)
-            : type === "heatwave" || type === "drought" ? (Math.sin(((doy - 45) / YEAR) * 2 * Math.PI) > 0.3 ? 2 : 0.3) : 1;
-          if (R.chance(p * seasonal)) { event = type; break; }
+        const season = Math.sin(((doy - 45) / YEAR) * 2 * Math.PI); // +1 midsummer, -1 midwinter
+        const types = Object.entries(this.sc.disasters);
+        // shuffle so earlier table entries don't always win ties
+        for (let i = types.length - 1; i > 0; i--) { const j = R.randint(0, i); [types[i], types[j]] = [types[j], types[i]]; }
+        for (const [type, p] of types) {
+          if (!this.canHappen(type)) continue;
+          let seasonal = 1;
+          if (type === "frost") seasonal = season < -0.3 ? 2.5 : 0.3;
+          if (type === "heatwave" || type === "drought") seasonal = season > 0.3 ? 2 : 0.3;
+          if (type === "wildfire") seasonal = season > 0.2 ? 2.2 : season < -0.4 ? 0.1 : 0.6;
+          if (type === "outbreak" && this.day - (this.dirtyWaterDay ?? -99) < 5) seasonal = 4; // truth: dirty water spreads disease
+          if (R.chance(p * seasonal * this.hazardMult)) { event = type; break; }
         }
       }
       const temp = this.climateTemp(doy) + R.uniform(-c.noise, c.noise);
@@ -245,11 +268,7 @@
       this.weather = this.forecast.shift();
       this.forecast.push(this.rollWeather(this.dayOfYear + 3));
       const w = this.weather;
-      if (w.event && !this.disaster) {
-        const d = DISASTERS[w.event];
-        this.disaster = { type: w.event, daysLeft: this.R.randint(d.days[0], d.days[1]), level: this.R.randint(1, 3) };
-        this.note("event", `${d.name} begins: ${d.desc}`);
-      }
+      if (w.event && !this.disaster) this.startDisaster(w.event);
       const dz = this.disaster && this.disaster.type;
       if (dz === "storm") { w.wind = 1; w.rain = Math.max(w.rain, 0.9); w.sun *= 0.4; }
       if (dz === "flood") { w.rain = Math.max(w.rain, 0.6); w.sun *= 0.6; }
@@ -298,6 +317,140 @@
           t.structure.hp -= 30;
           if (t.structure.hp <= 0) { this.note("event", `Floodwater destroyed the ${TECHNIQUES[t.structure.type].name.toLowerCase()} at (${t.x},${t.y}).`); t.structure = null; }
         }
+        if (t.charred > 0) t.charred--;
+      }
+      this.dailyHazards();
+    }
+
+    // ------------------------------------------------------------ hazards
+    canHappen(type) {
+      const T = this.sc.terrain;
+      if (type === "flood") return !!T.river;
+      if (type === "wildfire") return !T.sterile && this.tiles.filter((t) => this.burnable(t)).length > 8;
+      if (type === "outbreak") return !T.sterile; // sealed hab: no fevers on Mars
+      return true;
+    }
+    startDisaster(type, forced = false) {
+      const d = DISASTERS[type];
+      this.disaster = { type, daysLeft: this.R.randint(d.days[0], d.days[1]), level: this.R.randint(1, 3), forced, startDay: this.day };
+      this.note("event", `${d.name} begins: ${d.desc}`);
+      if (type === "earthquake") this.quake(1);
+      if (type === "wildfire") {
+        const cands = this.tiles.filter((t) => this.burnable(t) && this.dist(t, this.home) >= 4);
+        const pool = cands.filter((t) => t.type === "forest").length ? cands.filter((t) => t.type === "forest") : cands;
+        const n = Math.min(pool.length, this.R.randint(1, 2));
+        for (let i = 0; i < n; i++) { const t = this.R.choice(pool); t.burning = t.type === "forest" ? 3 : 2; }
+        if (!n) { this.note("event", "A grass fire flared up and burned itself out."); this.disaster.daysLeft = 0; }
+      }
+      if (type === "blight") {
+        const crops = this.tiles.filter((t) => t.crop && !t.greenhouse);
+        const byType = {};
+        for (const t of crops) byType[t.crop.type] = (byType[t.crop.type] || 0) + 1;
+        const worst = Object.entries(byType).sort((a, b) => b[1] - a[1])[0];
+        if (worst) {
+          const victims = crops.filter((t) => t.crop.type === worst[0]);
+          for (let i = 0; i < Math.min(2, victims.length); i++) this.R.choice(victims).crop.blight = true;
+          this.note("event", `Blight showed up on the ${CROPS[worst[0]].name.toLowerCase()}.`);
+        } else this.note("event", "Blight spores are in the air: anything planted in the next days is at risk.");
+      }
+      if (type === "outbreak") {
+        const healthy = this.alive.filter((s) => !s.sick);
+        const n = Math.min(healthy.length, this.R.randint(1, 2));
+        for (let i = 0; i < n; i++) { const s = healthy.splice(this.R.randint(0, healthy.length - 1), 1)[0]; s.sick = this.R.randint(5, 9); }
+        if (n && this.day - this.dirtyWaterDay < 5 && !this.beliefs.hazard.boilWater) {
+          this.hazardLesson("boilWater", "People fell sick days after we drank unboiled water. From now on we always boil it, even if it means chopping wood first.");
+        }
+      }
+    }
+    hazardLesson(key, msg) {
+      const h = this.beliefs.hazard;
+      if (h[key]) return;
+      h[key] = true;
+      h.learned.push(`Day ${this.day + 1}: ${msg}`);
+      this.note("learn", msg);
+    }
+    burnable(t) {
+      if (this.isWater(t) || t.flood > 0 || t.firebreak || t.burning) return false;
+      if (["rock", "ice", "sand", "ruins"].includes(t.type) && !t.structure) return false;
+      if (t.structure && t.structure.hab) return false;
+      return ["forest", "grass", "field", "marsh"].includes(t.type) || !!t.structure;
+    }
+    quake(mag) {
+      let damaged = 0;
+      for (const t of this.tiles) {
+        const s = t.structure;
+        if (t.greenhouse && this.R.chance((this.sc.terrain.sterile ? 0.08 : 0.25) * mag)) { t.greenhouse = false; t.lights = false; damaged++; this.note("event", `The greenhouse at (${t.x},${t.y}) shattered.`); }
+        if (!s) continue;
+        const dmg = this.R.randint(10, 60) * mag * (s.hab ? 0.4 : 1);
+        s.hp -= dmg;
+        if (dmg > 5) damaged++;
+        if (s.repairedDay !== undefined && this.day - s.repairedDay <= 4 && dmg > 15) {
+          this.hazardLesson("quakeWait", "An aftershock wrecked what we had just repaired. After a big quake we'll wait for the shaking to stop before rebuilding.");
+        }
+        if (s.type === "well") {
+          if (s.ok && dmg > 30 && this.R.chance(0.5)) { s.ok = false; this.note("event", `The well at (${t.x},${t.y}) collapsed.`); }
+          else if (!s.ok && this.R.chance(0.08 * mag)) { s.ok = true; this.note("learn", `The quake opened a spring: the dry well at (${t.x},${t.y}) now has water.`); }
+        }
+        if (s.hp <= 0) {
+          this.note("event", `The ${TECHNIQUES[s.type].name.toLowerCase()} at (${t.x},${t.y}) collapsed.`);
+          if (s.type === "shelter") for (const p of this.alive) if (p.x === t.x && p.y === t.y) { p.health -= this.R.randint(10, 25); p.cause = "Crushed"; }
+          t.structure = null;
+        }
+      }
+      if (mag < 1 && damaged) this.note("event", `Aftershock: ${damaged} structures took damage.`);
+    }
+    dailyHazards() {
+      const w = this.weather, dz = this.disaster && this.disaster.type, R = this.R;
+      // --- fire
+      const burning = this.tiles.filter((t) => t.burning > 0);
+      if (burning.length) {
+        const dry = (dz === "drought" || dz === "heatwave") ? 1.3 : 1;
+        for (const t of burning) {
+          if (w.rain > 0.3 && R.chance(w.rain * 0.6)) { t.burning = 0; continue; }
+          for (const n of this.neighbors(t)) {
+            if (!this.burnable(n)) continue;
+            const fuel = n.type === "forest" ? 1.4 : n.type === "marsh" ? 0.3 : n.type === "field" && !n.crop ? 0.4 : 1;
+            const p = 0.22 * (0.6 + w.wind) * (1.2 - n.moist) * fuel * dry * (w.rain > 0 ? 0.3 : 1);
+            if (R.chance(p)) n.burning = n.type === "forest" ? 3 : 2;
+          }
+          t.burning--;
+          if (t.burning <= 0) this.burnOut(t);
+        }
+        for (const p of this.alive) { const t = this.tile(p.x, p.y); if (t.burning > 0 && !(p.task && p.task.kind === "fight_fire")) { p.health -= 12; p.cause = "Burns"; } }
+        if (this.disaster && this.disaster.type === "wildfire") this.disaster.daysLeft = Math.max(this.disaster.daysLeft, 2);
+      }
+      if (dz === "wildfire" && !burning.length && this.disaster.daysLeft > 1) this.disaster.daysLeft = 1;
+      // --- aftershocks
+      if (dz === "earthquake" && this.day > this.disaster.startDay && R.chance(0.6)) this.quake(0.45);
+      // --- blight
+      let sameSpread = 0;
+      for (const t of this.tiles) {
+        if (!t.crop || !t.crop.blight) continue;
+        t.crop.health -= 0.07;
+        for (const n of this.neighbors(t)) {
+          if (!n.crop || n.crop.blight || n.greenhouse) continue;
+          const same = n.crop.type === t.crop.type;
+          if (R.chance(same ? 0.3 : 0.03)) { n.crop.blight = true; if (same) sameSpread++; }
+        }
+        if (t.crop.health <= 0) this.cropDies(t, "blight");
+      }
+      this.blightSameSpread = (this.blightSameSpread || 0) + sameSpread;
+      if (this.blightSameSpread >= 3) this.hazardLesson("mixCrops", "Blight jumps between neighbouring plots of the same crop and mostly skips different ones. We'll mix crops from now on.");
+      // --- outbreak persists while anyone is sick
+      if (dz === "outbreak" && this.alive.some((s) => s.sick)) this.disaster.daysLeft = Math.max(this.disaster.daysLeft, 2);
+    }
+    burnOut(t) {
+      t.burning = 0; t.charred = 25; t.ashDay = this.day;
+      const lost = [];
+      if (t.type === "forest") { t.type = "grass"; t.wood = 0; lost.push("forest"); }
+      if (t.crop) { lost.push(CROPS[t.crop.type].name.toLowerCase()); this.stats.cropsLost++; this.beliefs.crops[t.crop.type].lost++; t.crop = null; }
+      if (t.greenhouse) { t.greenhouse = false; t.lights = false; lost.push("greenhouse"); }
+      if (t.structure && !t.structure.hab && t.structure.type !== "well") { lost.push(TECHNIQUES[t.structure.type].name.toLowerCase()); t.structure = null; }
+      t.fert = clamp(t.fert + 0.2, 0, 1); // truth: ash is fertiliser
+      t.ash = true;
+      if (lost.some((x) => x !== "forest")) {
+        this.note("event", `Fire destroyed the ${lost.filter((x) => x !== "forest").join(", ")} at (${t.x},${t.y}).`);
+        this.hazardLesson("fireAware", "Fire races through dry grass and forest, faster in wind. We'll keep a cleared firebreak around the settlement in dry weather.");
       }
     }
 
@@ -448,6 +601,9 @@
       if (b.harvested === 1 && Math.abs(b.yieldFactor - 1) > 0.2) {
         this.learn(crop.type, `${truth.name} yields about ${Math.round(b.yieldFactor * 100)}% of what the handbook promised here.`);
       }
+      if (t.ash && !this.beliefs.hazard.ashFertile && ratio > 1.05) {
+        this.hazardLesson("ashFertile", "Burnt ground grows more than expected: the ash is fertiliser. Old fire scars make good fields.");
+      }
       // discovery: flood silt
       if (t.silt && !this.discoveries.silt) {
         this.siltWins = (this.siltWins || 0) + (t.fert > crop.fertAtPlant - 0.01 && ratio > 1.05 ? 1 : 0);
@@ -527,6 +683,7 @@
       u.growth = this.sc.noRadio ? 0 : pop < 8 && foodDays > 20 && waterNet >= 0 ? 0.25 : 0.05;
       // player priority boosts one need
       const map = { water: ["water", "waterSource"], food: ["food", "farming"], warmth: ["warmth", "fuel"], power: ["power"], safety: ["safety"] };
+      for (const k of Object.keys(u)) u[k] = Math.min(1, u[k] * (this.brain[k] ?? 1));
       for (const k of map[this.priority] || []) u[k] = Math.min(1, (u[k] || 0) + 0.45);
 
       return { pop, heat, minT, waterNet, waterDays, waterProdEst, foodDays, prodRate, shelterCap, fireNeed, woodDays, floodSoon, stormSoon, fields, powerNeed, cold, u };
@@ -632,7 +789,9 @@
         if (b.remediates && t.contam > 0.2) expected += 15 * t.contam; // value of cleaning soil
         const floodRisk = this.sc.terrain.river && t.elev <= 1 && !t.raised && !b.flood;
         if (floodRisk) expected *= 0.75;
-        out.push({ crop: id, name: b.name, expected: Math.round(expected), days, risk: risk || (floodRisk ? "flood-prone plot" : null), seeds: n });
+        const sameNext = this.beliefs.hazard.mixCrops && this.neighbors(t).some((nb) => nb.crop && nb.crop.type === id);
+        if (sameNext) expected *= 0.8;
+        out.push({ crop: id, name: b.name, expected: Math.round(expected), days, risk: risk || (floodRisk ? "flood-prone plot" : sameNext ? "same crop next door (blight)" : null), seeds: n });
       }
       return out.sort((a, b) => b.expected - a.expected);
     }
@@ -699,8 +858,13 @@
         const src = this.tiles.filter((t) => (this.isWater(t) || t.type === "marsh" || t.flood) && !this.reserved(t));
         if (src.length && !this.sc.terrain.sterile) {
           const t = src.reduce((a, b) => (this.dist(b, this.home) < this.dist(a, this.home) ? b : a));
-          const amt = this.inv.wood >= 1 ? 5 : 3; // boiled, or strained through sand and cloth
-          add({ label: `Fetch and boil water at (${t.x},${t.y})`, need: "water", value: u.water * amt * 4.5, why: `${A.waterDays.toFixed(1)} days of water left`, task: { kind: "gather", res: "water", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
+          const boil = this.inv.wood >= 1;
+          const amt = boil ? 5 : 3; // boiled, or strained through sand and cloth
+          let value = u.water * amt * 4.5;
+          // once burned by dirty water, only drink it unboiled in a real emergency
+          if (!boil && this.beliefs.hazard.boilWater && A.waterDays > 1) value *= 0.15 / this.brain.boilBias;
+          add({ label: `${boil ? "Fetch and boil" : "Fetch and strain"} water at (${t.x},${t.y})`, need: "water", value, why: `${A.waterDays.toFixed(1)} days of water left${boil ? "" : ", no firewood to boil it"}`, task: { kind: "gather", res: "water", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
+          if (!boil && this.beliefs.hazard.boilWater) { const g = this.gatherOption("wood", 2); if (g) add({ ...g, value: u.water * 10 * this.brain.boilBias, need: "water", why: "firewood to boil drinking water" }); }
         }
       }
       if (u.waterSource > 0) {
@@ -768,7 +932,7 @@
       // how many plots does it take to feed everyone, by our own beliefs?
       const perPlot = Math.max(0.15, ...Object.entries(this.seeds).filter(([, n]) => n > 0)
         .map(([id]) => { const cb = this.beliefs.crops[id]; return cb.yield * cb.yieldFactor * 0.7 / cb.days; }), 0.15);
-      const fieldsWanted = clamp(Math.ceil(pop / perPlot * 0.9), pop, pop * 3);
+      const fieldsWanted = clamp(Math.ceil(pop / perPlot * this.brain.fieldsMult), pop, pop * 3);
       if (plantable && A.fields < fieldsWanted) {
         const sterile = this.sc.terrain.sterile;
         const opts = this.tiles.filter((t) => this.freeLand(t) && (sterile ? t.type === "sand" : ["grass", "marsh", "sand"].includes(t.type)));
@@ -793,8 +957,9 @@
       // --- growth
       if (u.growth > 0.1 && !this.sc.noRadio && A.shelterCap >= pop + 2 && this.power.produced > 3 && !this.tiles.some((t) => t.structure && t.structure.type === "radio")) buildOption("radio", u.growth * 40, "we have spare beds, and a radio might reach other survivors");
       // --- keep a small stock of common materials
-      if (this.inv.wood < 6 && !this.sc.terrain.sterile) { const g = this.gatherOption("wood", 6); if (g) add({ ...g, value: 1.2, why: "wood stock is low" }); }
-      if (this.inv.scrap < 6) { const g = this.gatherOption("scrap", 6); if (g) add({ ...g, value: 1.0, why: "scrap stock is low" }); }
+      if (this.inv.wood < this.brain.woodStock && !this.sc.terrain.sterile) { const g = this.gatherOption("wood", 6); if (g) add({ ...g, value: 1.2, why: "wood stock is low" }); }
+      if (this.inv.scrap < this.brain.scrapStock) { const g = this.gatherOption("scrap", 6); if (g) add({ ...g, value: 1.0, why: "scrap stock is low" }); }
+      this.hazardOptions(A, add, buildOption);
 
       // --- player orders get a big boost
       for (const o of this.orders) {
@@ -814,11 +979,64 @@
           // food you get today counts; fields planted today feed no one for months
           const foodNow = /^(Forage|Fish|Harvest|Hunt)/.test(c.label);
           const survival = ["safety", "warmth", "water"].includes(c.need) || foodNow && (hungry || c.label.startsWith("Harvest"));
-          if (!survival && !(c.why || "").includes("ordered by you")) c.value *= 1 - 0.65 * crisis;
+          if (!survival && !(c.why || "").includes("ordered by you")) c.value *= 1 - this.brain.crisisDamp * crisis;
         }
       }
       this.crisis = crisis;
       return C.sort((a, b) => b.value - a.value);
+    }
+    hazardOptions(A, add) {
+      const b = this.brain, H = this.beliefs.hazard;
+      const isHome = (t) => t.x === this.home.x && t.y === this.home.y;
+      const valuable = (t) => !!(t.structure || t.crop || t.field || t.greenhouse || isHome(t));
+      // --- wildfire response
+      const burning = this.tiles.filter((t) => t.burning > 0);
+      for (const t of burning) {
+        const threat = this.tiles.filter((v) => valuable(v) && this.dist(v, t) <= 2).length + (this.dist(t, this.home) <= 3 ? 3 : 0);
+        if (!threat) continue;
+        if (this.inv.water >= 3 + A.pop && !this.reserved(t)) {
+          add({ label: `Fight the fire at (${t.x},${t.y})`, need: "safety", value: (8 + threat * 4) * b.fireResponse, why: `${threat} homes, fields or structures within reach`, task: { kind: "fight_fire", x: t.x, y: t.y, work: 1 }, skill: "building" });
+        }
+        for (const n of this.neighbors(t)) {
+          if (!this.burnable(n) || valuable(n) || this.reserved(n) || this.inv.tools < 1) continue;
+          const guards = this.neighbors(n).filter(valuable).length;
+          if (guards) add({ label: `Cut a firebreak at (${n.x},${n.y})`, need: "safety", value: (6 + guards * 4) * b.fireResponse, why: "clear the fuel so the fire can't reach what's beside it", task: { kind: "firebreak", x: n.x, y: n.y, work: 1 }, skill: "building" });
+        }
+      }
+      // --- learned prevention: a firebreak ring before the dry season
+      if (H.fireAware && !burning.length && this.inv.tools > 0) {
+        const avgMoist = this.tiles.reduce((a, t) => a + t.moist, 0) / this.tiles.length;
+        const dz = this.disaster && this.disaster.type;
+        const dryish = dz === "drought" || dz === "heatwave" || this.forecast.some((f) => ["wildfire", "heatwave", "drought"].includes(f.event))
+          || (this.season === "Summer" && avgMoist < 0.4);
+        if (dryish) {
+          const ring = this.tiles.filter((t) => { const d = this.dist(t, this.home); return d >= 1 && d <= 2 && this.burnable(t) && !valuable(t) && !this.reserved(t); });
+          if (ring.length) {
+            const t = ring.reduce((a, c) => (c.type === "forest" ? c : a));
+            add({ label: `Cut a firebreak at (${t.x},${t.y})`, need: "safety", value: 3 * b.fireResponse, why: "dry season: keep a cleared ring around home (learned the hard way)", task: { kind: "firebreak", x: t.x, y: t.y, work: 1 }, skill: "building" });
+          }
+        }
+      }
+      // --- repairs (storm, flood, quake damage)
+      const quaking = this.disaster && this.disaster.type === "earthquake";
+      for (const t of this.tiles) {
+        const s = t.structure;
+        if (!s || s.hp >= 70 || this.reserved(t)) continue;
+        const tech = TECHNIQUES[s.type];
+        const costs = [tech.requires, tech.alt].filter(Boolean).map((r) => { const k = Object.keys(r)[0]; return { [k]: Math.max(1, Math.ceil(r[k] / 3)) }; });
+        const cost = costs.find((c) => !Object.keys(this.missingFor(c)).length);
+        if (!cost) continue;
+        let value = (100 - s.hp) / 10 * b.repair * (["shelter", "well", "water_wheel", "ice_drill"].includes(s.type) ? 2 : 1);
+        let why = `${Math.max(0, Math.round(s.hp))}% intact`;
+        if (quaking && H.quakeWait) { value *= 0.15; why += "; waiting for the aftershocks to pass"; }
+        add({ label: `Repair the ${tech.name.toLowerCase()} at (${t.x},${t.y})`, need: tech.need === "materials" ? "safety" : tech.need, value, why, task: { kind: "repair", x: t.x, y: t.y, work: 1, req: cost }, skill: "building" });
+      }
+      // --- blight
+      for (const t of this.tiles) {
+        if (!t.crop || !t.crop.blight || this.reserved(t)) continue;
+        const same = this.neighbors(t).filter((n) => n.crop && !n.crop.blight && n.crop.type === t.crop.type).length;
+        add({ label: `Pull blighted ${CROPS[t.crop.type].name.toLowerCase()} at (${t.x},${t.y})`, need: "food", value: 6 + same * 5, why: same ? `${same} healthy plots of the same crop next to it` : "stop it spreading", task: { kind: "pull_blight", x: t.x, y: t.y, work: 1 }, skill: "farming" });
+      }
     }
     flowBelief() { return this.riverLevel < 0 ? 0.3 : 1; }
     gatherOption(res, amt) {
@@ -845,7 +1063,7 @@
       for (const s of this.alive) if (s.task) taken.add(`${s.task.x},${s.task.y}`);
       // each person takes the best remaining option, weighted by their skill
       for (const s of people) {
-        if (s.health < 25) { s.task = { kind: "rest", x: this.home.x, y: this.home.y, work: 1 }; s.status = "Resting to recover"; assignments.push({ name: s.name, label: "Rest (injured or sick)" }); continue; }
+        if (s.health < 25 || s.sick) { s.task = { kind: "rest", x: this.home.x, y: this.home.y, work: 1 }; s.status = s.sick ? "Sick with fever" : "Resting to recover"; assignments.push({ name: s.name, label: s.sick ? "Rest (fever)" : "Rest (injured)" }); continue; }
         let best = null, bestScore = 0;
         for (const c of C) {
           if (!c.task || c.blocked) continue;
@@ -934,7 +1152,11 @@
         }
         if (t.salvage <= 0) { t.type = "grass"; this.note("event", `Ruins at (${t.x},${t.y}) picked clean.`); }
       }
-      if (res === "water") { const boil = this.inv.wood >= 1; if (boil) this.inv.wood -= 1; this.inv.water += boil ? 5 : 2; }
+      if (res === "water") {
+        const boil = this.inv.wood >= 1;
+        if (boil) this.inv.wood -= 1; else this.dirtyWaterDay = this.day;
+        this.inv.water += boil ? 5 : 3;
+      }
       if (res === "forage") {
         const base = this.season === "Winter" ? 1 : this.season === "Autumn" ? 4 : 2.5;
         const n = Math.round(base * skill * (t.type === "sand" ? 0.5 : 1)); // desert plants are sparse
@@ -993,6 +1215,7 @@
       if (task.kind === "plant") {
         if (!t.field || t.crop) { this.seeds[task.crop]++; return; } // seed was reserved at assignment
         t.crop = { type: task.crop, growth: 0, health: 1, age: 0, planted: this.day, fertAtPlant: t.fert, contamAtPlant: t.contam, ripe: false };
+        if (this.disaster && this.disaster.type === "blight" && !t.greenhouse && this.R.chance(0.25)) t.crop.blight = true;
         this.beliefs.crops[task.crop].planted++;
         return;
       }
@@ -1001,6 +1224,32 @@
         if (task.early && t.crop.growth < 1) t.crop.health *= t.crop.growth;
         const food = this.harvest(t, s);
         this.note("build", `${s.name} harvested ${food} food${task.early ? " early" : ""} at (${t.x},${t.y}).`);
+        return;
+      }
+      if (task.kind === "fight_fire") {
+        s.x = this.home.x; s.y = this.home.y; // step back out of the flames
+        if (!t.burning) return;
+        this.inv.water = Math.max(0, this.inv.water - 3);
+        if (this.R.chance(0.55 + 0.2 * (s.skills.building || 1))) { t.burning = 0; this.note("build", `${s.name} put out the fire at (${t.x},${t.y}).`); }
+        return;
+      }
+      if (task.kind === "firebreak") {
+        if (t.burning) return;
+        if (t.type === "forest") { this.inv.wood += Math.floor(t.wood / 2); t.type = "grass"; t.wood = 0; }
+        t.firebreak = true;
+        return;
+      }
+      if (task.kind === "repair") {
+        if (!t.structure) return;
+        t.structure.hp = Math.min(100, t.structure.hp + 60);
+        t.structure.repairedDay = this.day;
+        this.note("build", `${s.name} repaired the ${TECHNIQUES[t.structure.type].name.toLowerCase()} at (${t.x},${t.y}).`);
+        return;
+      }
+      if (task.kind === "pull_blight") {
+        if (!t.crop) return;
+        this.note("event", `${s.name} pulled the blighted ${CROPS[t.crop.type].name.toLowerCase()} at (${t.x},${t.y}).`);
+        this.inv.compost += 1; t.crop = null;
         return;
       }
       if (task.kind === "fertilize") {
@@ -1045,9 +1294,29 @@
       let coldBeds = unheated * 4;
       // compost from human waste and scraps (Watney's trick)
       this.inv.compost += pop * 0.25;
+      // fever: spreads between people sharing shelters, and from dirty water
+      const sick = alive.filter((s) => s.sick);
+      if (!this.sc.terrain.sterile) {
+        for (const s of alive) {
+          if (s.sick) continue;
+          const p = sick.length * 0.03 + (this.day - this.dirtyWaterDay <= 2 ? 0.015 : 0);
+          if (this.R.chance(p)) {
+            s.sick = this.R.randint(4, 8);
+            if (!sick.length && this.day - this.dirtyWaterDay <= 2 && !this.beliefs.hazard.boilWater) {
+              this.hazardLesson("boilWater", `${s.name} got a fever right after we drank unboiled water. From now on we always boil it, even if it means chopping wood first.`);
+            }
+          }
+        }
+      }
       for (const s of alive) {
+        if (s.health <= 0) { s.health = 0; s.cause = s.cause || "Injuries"; continue; }
         let dmg = 0, cause = null;
         const hit = (v, c) => { if (v > dmg) cause = c; dmg += v; };
+        if (s.sick) {
+          hit(foodShare >= 1 && waterShare >= 1 ? 1.2 : 3.5, "Fever"); // well-fed, watered patients mostly pull through
+          s.sick--;
+          if (s.sick <= 0) { s.sick = 0; this.note("event", `${s.name} recovered from the fever.`); }
+        }
         if (waterShare < 1) hit((1 - waterShare) * 22, "Thirst");
         if (foodShare < 1) hit((1 - foodShare) * 6, "Starvation");
         const sheltered = beds > 0;
@@ -1121,6 +1390,61 @@
     }
 
     // ------------------------------------------------------------ player
+    triggerDisaster(kind) {
+      if (!DISASTERS[kind]) throw new Error(`Unknown disaster ${kind}`);
+      if (!this.canHappen(kind)) throw new Error(`A ${DISASTERS[kind].name.toLowerCase()} can't happen here.`);
+      if (this.disaster) { this.note("event", `${DISASTERS[this.disaster.type].name} is over.`); this.disaster = null; }
+      const nm = DISASTERS[kind].name.toLowerCase();
+      this.note("order", `You unleashed ${/^[aeiou]/.test(nm) ? "an" : "a"} ${nm}.`);
+      this.startDisaster(kind, true);
+    }
+    setHazards(level) {
+      if (!(level in HAZARD_LEVELS)) throw new Error(`Unknown hazard level ${level}`);
+      this.hazards = level; this.hazardMult = HAZARD_LEVELS[level];
+      this.note("order", `Disaster frequency set to ${level}.`);
+    }
+    // Knowledge that carries over between games (see frontier-train.js).
+    exportKnowledge(prev = null) {
+      const k = prev ? JSON.parse(JSON.stringify(prev)) : { years: 0, crops: {}, hazard: {}, places: {} };
+      k.years = (k.years || 0) + 1;
+      for (const [id, b] of Object.entries(this.beliefs.crops)) {
+        const c = k.crops[id] || { learned: [] };
+        c.minT = b.minT; c.frostKill = b.frostKill; c.flood = b.flood;
+        if (b.harvested) c.yieldFactor = c.yieldFactor ? (c.yieldFactor + b.yieldFactor) / 2 : b.yieldFactor;
+        for (const l of b.learned) { const txt = l.replace(/^Day \d+: /, ""); if (!c.learned.includes(txt)) c.learned.push(txt); }
+        k.crops[id] = c;
+      }
+      for (const key of ["fireAware", "quakeWait", "mixCrops", "boilWater", "ashFertile"]) if (this.beliefs.hazard[key]) k.hazard[key] = true;
+      k.hazard.learned = [...new Set([...(k.hazard.learned || []), ...this.beliefs.hazard.learned.map((l) => l.replace(/^Day \d+: /, ""))])];
+      const place = k.places[this.scenarioId] || {};
+      place.wells = this.beliefs.tech.well.byElev.map((b) => ({ ok: b.ok, fail: b.fail }));
+      place.power = { wind_turbine: this.beliefs.tech.wind_turbine.output, solar_array: this.beliefs.tech.solar_array.output };
+      if (this.discoveries.silt) place.silt = true;
+      k.places[this.scenarioId] = place;
+      if (this.discoveries.sunflower) k.sunflower = true;
+      return k;
+    }
+    applyKnowledge(k) {
+      this.knowledgeYears = k.years || 0;
+      for (const [id, c] of Object.entries(k.crops || {})) {
+        const b = this.beliefs.crops[id];
+        if (!b) continue;
+        if (c.minT !== undefined) b.minT = c.minT;
+        if (c.frostKill !== undefined) b.frostKill = c.frostKill;
+        if (c.flood !== undefined) b.flood = c.flood;
+        if (c.yieldFactor) b.yieldFactor = c.yieldFactor;
+        b.learned = (c.learned || []).map((t) => `Inherited: ${t}`);
+      }
+      for (const [key, v] of Object.entries(k.hazard || {})) if (key !== "learned" && v) this.beliefs.hazard[key] = true;
+      this.beliefs.hazard.learned = (k.hazard && k.hazard.learned || []).map((t) => `Inherited: ${t}`);
+      const place = (k.places || {})[this.scenarioId];
+      if (place) {
+        if (place.wells) this.beliefs.tech.well.byElev = place.wells.map((w) => ({ ...w }));
+        if (place.power) { this.beliefs.tech.wind_turbine.output = place.power.wind_turbine; this.beliefs.tech.solar_array.output = place.power.solar_array; this.beliefs.tech.wind_turbine.samples = this.beliefs.tech.solar_array.samples = 25; }
+        if (place.silt) this.discoveries.silt = true;
+      }
+      if (k.sunflower) this.discoveries.sunflower = true;
+    }
     setPriority(p) {
       if (!["auto", "water", "food", "warmth", "power", "safety"].includes(p)) throw new Error(`Unknown priority ${p}`);
       this.priority = p;
@@ -1182,12 +1506,13 @@
       power: { ...f.power }, water: { ...f.water },
       tiles: f.tiles.map((t) => ({
         x: t.x, y: t.y, type: t.type, elev: t.elev, fert: r1(t.fert), moist: r1(t.moist), flood: t.flood, contam: r1(t.contam), salt: r1(t.salt), silt: t.silt,
+        burning: t.burning || 0, firebreak: !!t.firebreak, charred: t.charred || 0, ash: !!t.ash,
         field: t.field, greenhouse: t.greenhouse, lights: t.lights, raised: t.raised, irrigated: t.irrigated, levee: t.levee,
         wood: t.wood, stone: t.stone, salvage: t.salvage,
-        structure: t.structure ? { type: t.structure.type, ok: t.structure.ok, heater: t.structure.heater, hab: t.structure.hab, panels: t.structure.panels, powered: t.powered } : null,
-        crop: t.crop ? { type: t.crop.type, growth: r1(t.crop.growth * 100) / 100, health: r1(t.crop.health), ripe: t.crop.ripe } : null,
+        structure: t.structure ? { type: t.structure.type, hp: Math.round(t.structure.hp), ok: t.structure.ok, heater: t.structure.heater, hab: t.structure.hab, panels: t.structure.panels, powered: t.powered } : null,
+        crop: t.crop ? { type: t.crop.type, growth: r1(t.crop.growth * 100) / 100, health: r1(t.crop.health), ripe: t.crop.ripe, blight: !!t.crop.blight } : null,
       })),
-      survivors: f.alive.map((s) => ({ id: s.id, name: s.name, x: s.x, y: s.y, health: Math.round(s.health), status: s.status, skills: s.skills, task: s.task ? s.task.label || s.task.kind : null })),
+      survivors: f.alive.map((s) => ({ id: s.id, name: s.name, x: s.x, y: s.y, health: Math.round(s.health), status: s.status, sick: s.sick || 0, skills: s.skills, task: s.task ? s.task.label || s.task.kind : null })),
       mind: f.mind,
       log: f.log.slice(-80),
       beliefs: {
@@ -1202,6 +1527,12 @@
         powerLearned: [...f.beliefs.tech.wind_turbine.learned, ...f.beliefs.tech.solar_array.learned],
       },
       discoveries: { ...f.discoveries },
+      hazardBeliefs: { ...f.beliefs.hazard },
+      hazardGuide: HAZARD_GUIDE,
+      hazards: f.hazards,
+      hazardLevels: Object.keys(HAZARD_LEVELS),
+      disasterTypes: Object.keys(DISASTERS).map((k) => ({ id: k, name: DISASTERS[k].name, possible: f.canHappen(k), inScenario: k in f.sc.disasters })),
+      trained: f.trained, knowledgeYears: f.knowledgeYears || 0, brain: { ...f.brain },
       techniques: TECHNIQUES,
       ruleOfThrees: RULE_OF_THREES,
       checklist: f.checklist(),
@@ -1227,13 +1558,15 @@
         if (cmd.type === "priority") f.setPriority(cmd.priority);
         else if (cmd.type === "order") f.order(cmd);
         else if (cmd.type === "cancel_orders") { f.orders = []; f.note("order", "You cancelled your orders."); }
+        else if (cmd.type === "disaster") f.triggerDisaster(cmd.kind);
+        else if (cmd.type === "hazards") f.setHazards(cmd.level);
         else throw new Error(`Unknown command ${cmd.type}`);
         return serialize(f);
       },
     };
   }
 
-  const api = { Frontier, createFrontier, serialize, YEAR };
+  const api = { Frontier, createFrontier, serialize, YEAR, DEFAULT_BRAIN };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FRONTIER = api;
 })(typeof window !== "undefined" ? window : globalThis);

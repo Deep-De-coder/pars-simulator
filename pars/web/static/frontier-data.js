@@ -95,7 +95,7 @@
       inventory: { food: 42, water: 8, wood: 6, stone: 2, scrap: 6, wire: 1, plastic: 2, panels: 0, compost: 0, tools: 2 },
       seeds: { potato: 6, beans: 6, kale: 6, corn: 4, rice: 3, radish: 6 },
       opening: { type: "flood", days: 6, level: 2 },
-      disasters: { flood: 0.01, storm: 0.01, frost: 0.008, drought: 0.005, heatwave: 0.003 },
+      disasters: { flood: 0.008, storm: 0.008, frost: 0.006, drought: 0.004, heatwave: 0.003, wildfire: 0.004, earthquake: 0.002, blight: 0.004, outbreak: 0.004 },
     },
     ash_winter: {
       name: "Ash Winter",
@@ -108,7 +108,7 @@
       inventory: { food: 25, water: 10, wood: 8, stone: 4, scrap: 14, wire: 3, plastic: 4, panels: 1, compost: 0, tools: 3 },
       seeds: { potato: 6, kale: 8, wheat: 6, radish: 8, sunflower: 5, beans: 4 },
       opening: { type: "ashfall", days: 12 },
-      disasters: { frost: 0.035, storm: 0.01, ashfall: 0.014, flood: 0.003 },
+      disasters: { frost: 0.03, storm: 0.008, ashfall: 0.012, flood: 0.003, blight: 0.004, outbreak: 0.006, earthquake: 0.003 },
     },
     dry_country: {
       name: "Dry Country",
@@ -122,7 +122,7 @@
       inventory: { food: 45, water: 20, wood: 4, stone: 4, scrap: 10, wire: 2, plastic: 3, panels: 2, compost: 0, tools: 2 },
       seeds: { amaranth: 8, sweetpotato: 5, beans: 5, squash: 4, corn: 3 },
       opening: { type: "heatwave", days: 5 },
-      disasters: { heatwave: 0.012, drought: 0.01, storm: 0.004 },
+      disasters: { heatwave: 0.012, drought: 0.008, storm: 0.004, wildfire: 0.006, earthquake: 0.003, outbreak: 0.004, blight: 0.002 },
     },
     after_wave: {
       name: "After the Wave",
@@ -135,7 +135,7 @@
       inventory: { food: 22, water: 4, wood: 10, stone: 2, scrap: 8, wire: 1, plastic: 3, panels: 0, compost: 0, tools: 2 },
       seeds: { kale: 6, sweetpotato: 4, squash: 4, beans: 4, rice: 4, radish: 6 },
       opening: { type: "storm", days: 3 },
-      disasters: { storm: 0.03, flood: 0.012, heatwave: 0.005 },
+      disasters: { storm: 0.025, flood: 0.01, heatwave: 0.004, earthquake: 0.006, blight: 0.004, outbreak: 0.006 },
     },
     red_planet: {
       name: "Red Planet",
@@ -148,7 +148,7 @@
       inventory: { food: 600, water: 20, wood: 0, stone: 6, scrap: 20, wire: 5, plastic: 10, panels: 1, compost: 10, tools: 3 },
       seeds: { potato: 12 },
       opening: null,
-      disasters: { storm: 0.008 },
+      disasters: { storm: 0.008, earthquake: 0.004, blight: 0.003 },
       noWildFood: true,
       noRadio: true,
       startShelter: true,
@@ -163,9 +163,32 @@
     drought: { name: "Drought", icon: "drought", days: [10, 20], desc: "No rain; soil dries out and rivers run low." },
     heatwave: { name: "Heatwave", icon: "heat", days: [4, 7], desc: "Scorching heat; people and crops need extra water." },
     ashfall: { name: "Ashfall", icon: "ash", days: [6, 12], desc: "Ash blots out the sun, so solar and crops suffer." },
+    wildfire: { name: "Wildfire", icon: "fire", days: [3, 8], desc: "Fire spreads through dry grass, forest and wooden buildings, faster in wind." },
+    earthquake: { name: "Earthquake", icon: "quake", days: [3, 5], desc: "The ground shakes: buildings crack and wells can collapse. Aftershocks follow." },
+    blight: { name: "Crop blight", icon: "blight", days: [8, 14], desc: "A fungus spreads from plant to plant and kills crops." },
+    outbreak: { name: "Fever outbreak", icon: "fever", days: [6, 12], desc: "A fever spreads between people living close together." },
   };
 
-  const api = { RULE_OF_THREES, CROPS, HANDBOOK_CROPS, TECHNIQUES, MATERIALS, SCENARIOS, DISASTERS, handbookErrors };
+  // What the handbook says to do in each disaster (shown to the player; the
+  // planner implements it). "learn" is what the colony can only find out by
+  // living through it.
+  const HAZARD_GUIDE = {
+    flood: { do: "Get people and seed stock to high ground. Harvest what you can, sandbag fields, then use the fast river for power.", learn: "Flood ground is more fertile afterwards (silt)." },
+    storm: { do: "Stay sheltered. Expect damage to turbines, catchers, panels and greenhouse covers; repair afterwards.", learn: null },
+    frost: { do: "Keep fires going and cover crops with greenhouses. Frost-tender crops will die.", learn: "Exactly how much cold each crop takes." },
+    drought: { do: "Ration water, water crops by hand, dig wells in low ground, irrigate from any remaining water.", learn: null },
+    heatwave: { do: "Everyone needs extra water. Work in the cool; crops wilt without water.", learn: null },
+    ashfall: { do: "Solar power and crops suffer without sun. Rely on stores, wind and water power.", learn: null },
+    wildfire: { do: "Fight fires near homes and fields with water, and cut firebreaks (clear strips of fuel) in the fire's path.", learn: "Keep a firebreak ring around the settlement before dry season. Burnt ground is fertile (ash)." },
+    earthquake: { do: "Get out of damaged buildings, check wells, repair what cracked.", learn: "Aftershocks follow; repairing too early wastes the work." },
+    blight: { do: "Pull infected plants at once so the fungus can't spread.", learn: "It jumps fastest between plots of the same crop, so mix crops." },
+    outbreak: { do: "Sick people rest and are fed and watered.", learn: "Unboiled water makes people sick. Always boil it." },
+  };
+
+  // Hazard frequency presets (multiplier on every disaster's daily chance)
+  const HAZARD_LEVELS = { calm: 0.5, normal: 1, frequent: 2, relentless: 3.5 };
+
+  const api = { RULE_OF_THREES, CROPS, HANDBOOK_CROPS, TECHNIQUES, MATERIALS, SCENARIOS, DISASTERS, HAZARD_GUIDE, HAZARD_LEVELS, handbookErrors };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FRONTIER_DATA = api;
 })(typeof window !== "undefined" ? window : globalThis);

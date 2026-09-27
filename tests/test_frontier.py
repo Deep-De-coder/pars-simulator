@@ -101,3 +101,57 @@ def test_red_planet_grows_potatoes():
       console.log(JSON.stringify({harvested}));
     """)
     assert res["harvested"] > 0
+
+
+def test_every_disaster_can_be_triggered_and_resolves():
+    res = run("""
+      const out = {};
+      for (const kind of Object.keys(D.DISASTERS)) {
+        const sc = kind === 'flood' ? 'river_flood' : kind === 'ashfall' ? 'ash_winter' : 'river_flood';
+        const f = new F.Frontier({scenario: sc, seed: 4});
+        for (let i = 0; i < 40; i++) f.tick();
+        f.triggerDisaster(kind);
+        for (let i = 0; i < 40 && f.running; i++) f.tick();
+        out[kind] = {over: !f.disaster || f.disaster.type !== kind || f.disaster.forced !== true,
+                     neg: Object.entries(f.inv).filter(([, v]) => v < 0).map(([k]) => k),
+                     burning: f.tiles.filter((t) => t.burning > 0).length};
+      }
+      let marsFire = null;
+      try { new F.Frontier({scenario: 'red_planet', seed: 1}).triggerDisaster('wildfire'); } catch (e) { marsFire = e.message; }
+      console.log(JSON.stringify({out, marsFire}));
+    """)
+    for kind, r in res["out"].items():
+        assert r["over"], f"{kind} never ended"
+        assert r["neg"] == [], f"{kind}: negative inventory"
+    assert res["out"]["wildfire"]["burning"] == 0
+    assert "can't happen" in res["marsFire"]
+
+
+def test_blight_spreads_along_same_crop_and_teaches_mixing():
+    # When nobody pulls the infected plants, blight runs through a block of
+    # one crop and the colony draws the lesson.
+    res = run("""
+      const f = new F.Frontier({scenario: 'river_flood', seed: 0});
+      for (let i = 0; i < 70; i++) f.tick();
+      const block = f.tiles.filter((t) => f.isLand(t) && t.x >= 2 && t.x <= 6 && t.y >= 1 && t.y <= 3);
+      for (const t of block) { t.greenhouse = false; t.field = true; t.crop = {type: 'potato', growth: 0.3, health: 1, age: 10, planted: 0, fertAtPlant: t.fert, contamAtPlant: 0, ripe: false}; }
+      block[0].crop.blight = true;
+      for (let i = 0; i < 12; i++) f.dailyHazards();
+      console.log(JSON.stringify({infected: block.filter((t) => !t.crop || t.crop.blight).length, block: block.length, learned: f.beliefs.hazard.mixCrops}));
+    """)
+    assert res["infected"] >= 4
+    assert res["learned"] is True
+
+
+def test_knowledge_carries_over_between_games():
+    res = run("""
+      const a = new F.Frontier({scenario: 'river_flood', seed: 1});
+      while (a.running) a.tick();
+      const k = a.exportKnowledge();
+      const b = new F.Frontier({scenario: 'river_flood', seed: 2, knowledge: k});
+      const potato = b.beliefs.crops.potato;
+      console.log(JSON.stringify({years: k.years, trained: b.trained, minT: potato.minT, fresh: new F.Frontier({scenario: 'river_flood', seed: 2}).beliefs.crops.potato.minT,
+        inherited: potato.learned.length}));
+    """)
+    assert res["years"] == 1 and res["trained"] is True
+    assert res["minT"] >= res["fresh"]
