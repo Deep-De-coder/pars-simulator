@@ -166,6 +166,7 @@
     }
     if (P.has("place") && k.places && k.places[scenario]) out.places[scenario] = k.places[scenario];
     if (P.has("cropLimits") && k.sunflower) out.sunflower = true;
+    if (P.has("cropLimits") && k.vents) out.vents = true;
     return out;
   }
   // What the pre-trained veteran brings to a given place.

@@ -545,8 +545,11 @@
     coldTonight() { return this.weather.temp < 10; }
 
     // ------------------------------------------------------------ crops
-    cropTemp(t, temp) {
-      const warmed = temp + (t.greenhouse ? 12 : 0);
+    cropTemp(t, temp, cropId = t.crop && t.crop.type) {
+      let warmed = temp + (t.greenhouse ? 12 : 0);
+      // once we've learned to, we open the vents on warm days so the plot
+      // doesn't cook: no warmer than the crop likes, never cooler than outside
+      if (t.greenhouse && this.discoveries.vents && cropId) warmed = Math.max(temp, Math.min(warmed, this.beliefs.crops[cropId].optHi));
       return t.lights && t.powered ? Math.max(warmed, 18) : warmed;
     }
     growthRate(c, temp) { // c: crop params (truth or belief)
@@ -590,6 +593,14 @@
         if (this.disaster && this.disaster.type === "storm" && !t.greenhouse) crop.health -= 0.05;
         crop.health = clamp(crop.health, 0, 1);
         if (crop.health <= 0) { this.cropDies(t, water < 0.4 ? "drought" : "stress"); continue; }
+        // learning: a greenhouse crop stalling from heat on a mild day
+        if (t.greenhouse && !this.discoveries.vents && temp > truth.optHi + 1 && w.temp < truth.optHi) {
+          this.heatStallDays = (this.heatStallDays || 0) + 1;
+          if (this.heatStallDays >= 6) {
+            this.discoveries.vents = true;
+            this.note("learn", `The ${truth.name.toLowerCase()} under glass slows down on mild sunny days: the greenhouse overheats. We'll open the vents when it's warm.`);
+          }
+        }
         // learning: crop stalled by cold that the handbook said was fine
         if (temp < truth.minT + 0.5 && temp > belief.minT) {
           belief.coldDays++;
@@ -874,7 +885,9 @@
         let growth = 0, risk = null, days = 0;
         const horizon = Math.min(b.days * 2, 200);
         for (let d = 0; d < horizon && growth < 1; d++) {
-          const raw = this.climateTemp(this.dayOfYear + d) + (t.greenhouse ? 12 : 0);
+          const out = this.climateTemp(this.dayOfYear + d);
+          let raw = out + (t.greenhouse ? 12 : 0);
+          if (t.greenhouse && this.discoveries.vents) raw = Math.max(out, Math.min(raw, b.optHi));
           const temp = lit ? Math.max(raw, 18) : raw;
           if (temp <= b.frostKill + 1) { risk = `frost around day ${d}`; break; }
           const light = (lit ? 1 : clamp(this.sc.climate.sun * 1.3, 0.15, 1));
@@ -1734,6 +1747,7 @@
       if (this.discoveries.silt) place.silt = true;
       k.places[this.scenarioId] = place;
       if (this.discoveries.sunflower) k.sunflower = true;
+      if (this.discoveries.vents) k.vents = true;
       return k;
     }
     applyKnowledge(k) {
@@ -1760,6 +1774,7 @@
 
       }
       if (k.sunflower) this.discoveries.sunflower = true;
+      if (k.vents) this.discoveries.vents = true;
     }
     setPriority(p) {
       if (!["auto", "water", "food", "warmth", "power", "safety"].includes(p)) throw new Error(`Unknown priority ${p}`);

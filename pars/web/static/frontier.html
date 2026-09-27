@@ -1067,6 +1067,7 @@ function renderBook(s) {
     ["silt", "Flood silt makes old flood ground fertile. We plant there first."],
     ["sunflower", "Sunflowers really do pull contamination out of the soil."],
     ["wheel", "A water wheel gives steady power, and more when the river is high."],
+    ["vents", "Greenhouses overheat on mild sunny days; we open the vents so crops stay in their comfort range."],
   ].filter(([k]) => s.discoveries[k]);
   $("discoveries").innerHTML = disc.length ? disc.map(([, t]) => `<div><span style="color:var(--learn)">★</span><div>${esc(t)}</div></div>`).join("") : `<div class="muted" style="grid-template-columns:1fr">Nothing yet. The colony finds things out by trying them.</div>`;
   const inHand = new Set(Object.entries(s.seeds).filter(([, n]) => n > 0).map(([k]) => k));
