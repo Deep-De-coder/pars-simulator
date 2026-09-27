@@ -69,8 +69,9 @@
 
   // ================================================================ world
   class Frontier {
-    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true } = {}) {
+    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true, learnPower = true } = {}) {
       this.learnYields = learnYields;
+      this.learnPower = learnPower;
       if (!(hazards in HAZARD_LEVELS)) throw new Error(`Unknown hazard level ${hazards}`);
       this.hazards = hazards;
       this.hazardMult = HAZARD_LEVELS[hazards];
@@ -332,7 +333,7 @@
           t.structure.hp -= this.R.randint(15, 40);
           if (t.structure.hp <= 0) { this.note("event", `The storm wrecked the ${TECHNIQUES[t.structure.type].name.toLowerCase()} at (${t.x},${t.y}).`); t.structure = null; }
         }
-        if (dz === "storm" && t.greenhouse && this.R.chance(0.08)) { t.greenhouse = false; t.lights = false; this.note("event", `Wind tore the greenhouse cover off (${t.x},${t.y}).`); }
+        if (dz === "storm" && t.greenhouse && this.R.chance((t.bracedUntil || 0) >= this.day ? 0.02 : 0.08)) { this.loseCover(t); this.note("event", `Wind tore the greenhouse cover off (${t.x},${t.y}).`); }
         if (t.flood >= 2 && t.structure && !["well", "water_wheel"].includes(t.structure.type) && this.R.chance(0.3)) {
           t.structure.hp -= 30;
           if (t.structure.hp <= 0) { this.note("event", `Floodwater destroyed the ${TECHNIQUES[t.structure.type].name.toLowerCase()} at (${t.x},${t.y}).`); t.structure = null; }
@@ -400,7 +401,7 @@
       let damaged = 0;
       for (const t of this.tiles) {
         const s = t.structure;
-        if (t.greenhouse && this.R.chance((this.sc.terrain.sterile ? 0.08 : 0.25) * mag)) { t.greenhouse = false; t.lights = false; damaged++; this.note("event", `The greenhouse at (${t.x},${t.y}) shattered.`); }
+        if (t.greenhouse && this.R.chance((this.sc.terrain.sterile ? 0.08 : 0.25) * mag)) { this.loseCover(t); damaged++; this.note("event", `The greenhouse at (${t.x},${t.y}) shattered.`); }
         if (!s) continue;
         const dmg = this.R.randint(10, 60) * mag * (s.hab ? 0.4 : 1);
         s.hp -= dmg;
@@ -506,23 +507,26 @@
           }
         }
       }
-      // spend power: heaters when cold, ice drills, grow lights, radio
+      // spend power: heaters when cold, grow lights over growing crops, ice
+      // drills, radio. Handbook: lights over empty beds are switched off, and
+      // living crops come before topping up a water tank that isn't low.
       let avail = power + this.power.stored;
       const consumers = [];
+      const waterLow = this.inv.water < this.alive.length * 4;
       for (const t of this.tiles) {
         const s = t.structure;
         if (s && s.type === "shelter" && s.heater && this.coldTonight()) consumers.push({ t, kind: "heat", cost: 2 });
-        if (s && s.type === "ice_drill" && this.inv.water < this.alive.length * 20) consumers.push({ t, kind: "drill", cost: 2 });
-        if (t.lights) consumers.push({ t, kind: "lights", cost: 2 });
+        if (s && s.type === "ice_drill" && this.inv.water < this.alive.length * 20) consumers.push({ t, kind: waterLow ? "drillUrgent" : "drill", cost: 2 });
+        if (t.lights) { if (t.crop) consumers.push({ t, kind: "lights", cost: 2 }); else t.powered = false; }
         if (s && s.type === "radio") consumers.push({ t, kind: "radio", cost: 1 });
       }
-      const order = { heat: 0, drill: 1, lights: 2, radio: 3 };
+      const order = { heat: 0, drillUrgent: 1, lights: 2, drill: 3, radio: 4 };
       consumers.sort((a, b) => order[a.kind] - order[b.kind]);
       let used = 0;
       const short = [];
       for (const c of consumers) {
         c.t.powered = avail >= c.cost;
-        if (c.t.powered) { avail -= c.cost; used += c.cost; if (c.kind === "drill") water += 7; }
+        if (c.t.powered) { avail -= c.cost; used += c.cost; if (c.kind === "drill" || c.kind === "drillUrgent") water += 7; }
         else short.push(c.kind);
       }
       this.power.produced = r1(power);
@@ -551,6 +555,8 @@
         const crop = t.crop;
         if (!crop) continue;
         const truth = CROPS[crop.type], belief = this.beliefs.crops[crop.type];
+        // a crop planted today under lights draws from the battery tonight
+        if (t.lights && !t.powered && this.power.stored >= 2) { this.power.stored -= 2; this.power.used += 2; t.powered = true; }
         const temp = this.cropTemp(t, w.temp);
         crop.age++;
         // what this crop has been exposed to (to tell "untested" from "wrong")
@@ -598,8 +604,19 @@
         }
       }
     }
+    loseCover(t) {
+      if (t.crop) { t.coverLost = this.day; t.hadLights = !!t.lights; }
+      t.greenhouse = false; t.lights = false;
+    }
     cropDies(t, cause, temp) {
       const crop = t.crop, truth = CROPS[crop.type], b = this.beliefs.crops[crop.type];
+      // a greenhouse that froze because its lights lost power teaches us to
+      // keep spare power, not that the crop is tender
+      if (cause === "frost" && t.lights && !t.powered && this.learnPower) {
+        const m = this.beliefs.powerMargin || 0;
+        this.beliefs.powerMargin = Math.min(8, m + 2);
+        if (!m) this.note("learn", `A power cut let the greenhouse at (${t.x},${t.y}) freeze. From now on we keep spare power before lighting more plots.`);
+      }
       b.lost++;
       this.stats.cropsLost++;
       this.plotStats.plotDays += crop.age;
@@ -710,7 +727,8 @@
       u.waterSource = waterNet < 0 ? clamp(0.45 + (-waterNet / pop) * 0.4, 0.45, 0.9) : 0;
       u.food = clamp((21 - foodDays) / 18, 0, 1);
       u.farming = clamp(1 - prodRate / pop, 0, 1) * (foodDays < 60 ? 1 : 0.5);
-      u.power = powerNeed > this.power.produced + 0.5 ? clamp(0.35 + (powerNeed - this.power.produced) * 0.08, 0.35, 0.85) : (this.power.produced === 0 ? 0.2 : 0.05);
+      const margin = this.beliefs.powerMargin || 0;
+      u.power = powerNeed + margin > this.power.produced + 0.5 ? clamp(0.35 + (powerNeed + margin - this.power.produced) * 0.08, 0.35, 0.85) : (this.power.produced === 0 ? 0.2 : 0.05);
       u.growth = this.sc.noRadio ? 0 : pop < 8 && foodDays > 20 && waterNet >= 0 ? 0.25 : 0.05;
       // player priority boosts one need
       const map = { water: ["water", "waterSource"], food: ["food", "farming"], warmth: ["warmth", "fuel"], power: ["power"], safety: ["safety"] };
@@ -970,7 +988,7 @@
           buildOption("irrigation", 18 * foodValue * (this.sc.climate.rain < 0.2 ? 1.6 : 1), "a channel from the water saves watering by hand every few days", t);
         }
         if (t.greenhouse && !t.lights && (this.sc.climate.sun < 0.6 || this.sc.climate.mean + 12 < 10)) {
-          if (this.power.produced - A.powerNeed > 1.5) buildOption("grow_lights", 25 * foodValue, "the greenhouse alone is too dark or too cold", t);
+          if (this.power.produced - A.powerNeed > 1.5 + (this.beliefs.powerMargin || 0)) buildOption("grow_lights", 25 * foodValue, "the greenhouse alone is too dark or too cold", t);
           else if (u.power < 0.6) u.power = 0.6; // we need more power before lights make sense
         }
       }
@@ -1002,7 +1020,7 @@
         const b = this.beliefs.tech;
         // While power is genuinely short, a weak source is still worth building:
         // value it by the shortage it helps cover, with efficiency as a tiebreak.
-        const unmet = A.powerNeed - this.power.produced;
+        const unmet = A.powerNeed + (this.beliefs.powerMargin || 0) - this.power.produced;
         const worth = (out) => (unmet > 1 ? Math.max(out, Math.min(unmet, 4)) + out * 0.15 : out);
         if (this.sc.terrain.river) buildOption("water_wheel", u.power * worth(6 * this.flowBelief()) * horizon * 0.25, "the river keeps flowing day and night");
         if (this.inv.panels > 0 || this.tiles.some((t) => t.type === "ruins" && t.salvage > 0)) buildOption("solar_array", u.power * worth(b.solar_array.output) * horizon * 0.25, `panels give ~${b.solar_array.output.toFixed(1)}/day here${unmet > 1 ? `; we're ${unmet.toFixed(0)} short` : ""}`);
@@ -1042,6 +1060,20 @@
     }
     hazardOptions(A, add) {
       const b = this.brain, H = this.beliefs.hazard;
+      // --- greenhouses (handbook: brace covers before a storm; patch a torn
+      // cover the same day, or the crop under it freezes tonight)
+      for (const t of this.tiles) {
+        if (t.crop && !t.greenhouse && t.coverLost !== undefined && this.day - t.coverLost <= 1 && !this.reserved(t)) {
+          const cb = this.beliefs.crops[t.crop.type];
+          if (this.weather.temp <= cb.frostKill + 4 || this.sc.terrain.sterile) {
+            const mat = this.inv.plastic >= 2 ? "plastic" : this.inv.scrap >= 3 ? "scrap" : null;
+            if (mat) add({ label: `Patch the torn greenhouse at (${t.x},${t.y})`, need: "food", value: 20 + t.crop.growth * 30, why: `the ${cb.name.toLowerCase()} under it freezes tonight without cover`, task: { kind: "patch", x: t.x, y: t.y, work: 0.6, mat }, skill: "building" });
+          }
+        }
+        if (A.stormSoon && t.greenhouse && t.crop && (t.bracedUntil || 0) < this.day && !this.reserved(t)) {
+          add({ label: `Brace the greenhouse at (${t.x},${t.y})`, need: "safety", value: 4 + t.crop.growth * 8 + (this.sc.terrain.sterile ? 6 : 0), why: "a storm is coming; weighted, braced covers rarely tear", task: { kind: "brace", x: t.x, y: t.y, work: 0.5 }, skill: "building" });
+        }
+      }
       const isHome = (t) => t.x === this.home.x && t.y === this.home.y;
       const valuable = (t) => !!(t.structure || t.crop || t.field || t.greenhouse || isHome(t));
       // --- wildfire response
@@ -1438,6 +1470,16 @@
         this.inv.compost += 1; t.crop = null;
         return;
       }
+      if (task.kind === "patch") {
+        if (!t.crop || t.greenhouse) return;
+        if (task.mat === "plastic" && this.inv.plastic >= 2) this.inv.plastic -= 2;
+        else if (this.inv.scrap >= 3) this.inv.scrap -= 3;
+        else return;
+        t.greenhouse = true; t.lights = !!t.hadLights; t.coverLost = undefined;
+        this.note("build", `${s.name} patched the greenhouse at (${t.x},${t.y}) before nightfall.`);
+        return;
+      }
+      if (task.kind === "brace") { t.bracedUntil = this.day + 6; return; }
       if (task.kind === "fertilize") {
         if (this.inv.compost < 2) return;
         this.inv.compost -= 2; t.fert = clamp(t.fert + 0.15, 0, 1);
@@ -1610,6 +1652,7 @@
       place.wells = this.beliefs.tech.well.byElev.map((b) => ({ ok: b.ok, fail: b.fail }));
       if (this.beliefs.tech.well.real) place.wellsReal = this.beliefs.tech.well.real.map((c) => ({ ...c }));
       place.power = { wind_turbine: this.beliefs.tech.wind_turbine.output, solar_array: this.beliefs.tech.solar_array.output };
+      if (this.beliefs.powerMargin) place.powerMargin = this.beliefs.powerMargin;
       place.yields = Object.fromEntries(Object.entries(this.beliefs.yields).map(([k, b]) => [k, { m: b.m, n: Math.min(30, b.n), told: b.told }]));
 
       if (this.discoveries.silt) place.silt = true;
@@ -1636,6 +1679,7 @@
         if (place.wellsReal) { this.beliefs.tech.well.real = place.wellsReal.map((c) => ({ ...c })); this.generalizeWells(); this.wellsGeneralized = true; }
         if (place.power) { this.beliefs.tech.wind_turbine.output = place.power.wind_turbine; this.beliefs.tech.solar_array.output = place.power.solar_array; this.beliefs.tech.wind_turbine.samples = this.beliefs.tech.solar_array.samples = 25; }
         if (place.silt) this.discoveries.silt = true;
+        if (place.powerMargin) this.beliefs.powerMargin = place.powerMargin;
         if (place.yields) for (const [k, y] of Object.entries(place.yields)) if (this.beliefs.yields[k]) Object.assign(this.beliefs.yields[k], y, { seen: y.told ? 99 : 0 });
 
       }
