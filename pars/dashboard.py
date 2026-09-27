@@ -202,7 +202,7 @@ def build_layout(grid, survivors, intel, stockpile, tech_tree, coordinator, turn
     layout["maps"].update(Panel("\n\n".join(map_panels), title="🗺  3D ENVIRONMENT LAYERS", border_style="blue"))
 
     # Coordinator logs (last 6 entries)
-    log_lines = coordinator.thought_log[-8:]
+    log_lines = coordinator.thought_log[-10:]
     log_text = "\n".join(log_lines) if log_lines else "No logs yet..."
     layout["logs"].update(Panel(log_text, title="🧠 COORDINATOR LOG", border_style="yellow"))
 

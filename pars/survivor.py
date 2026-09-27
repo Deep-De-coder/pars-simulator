@@ -1,3 +1,4 @@
+import itertools
 import random
 
 NAMES_DB = [
@@ -6,271 +7,282 @@ NAMES_DB = [
     "Chris", "Pat", "Terry", "Dana", "Kim", "Kelly", "Leslie", "Jan", "Val", "Ren"
 ]
 
+GENE_NAMES = ("speed", "foraging", "rad_resistance", "cold_resistance", "intelligence")
+
+# What each Z level yields when foraged: (resource, min, max, flavour label),
+# in the order they are tried.
+FORAGE_TABLE = {
+    0: [("water", 5, 12, "Water"), ("biomass", 6, 14, "Biomass"), ("scrap", 4, 10, "Scrap")],
+    -1: [("water", 8, 15, "Water"), ("scrap", 3, 8, "Bunker Scrap"), ("biomass", 2, 5, "Fungi")],
+    1: [("biomass", 3, 8, "Alpine Biomass"), ("scrap", 3, 8, "High Wreckage"), ("water", 2, 6, "Ice")],
+}
+
+HUNGER_PER_BIOMASS = 10.0
+HUNGER_PER_WATER = 6.0
+
+_ids = itertools.count(1)
+
+
+def reset_ids():
+    """Restart survivor numbering (called per Simulation for reproducible names)."""
+    global _ids
+    _ids = itertools.count(1)
+
+
 class Survivor:
     def __init__(self, x=2, y=2, z=0, genes=None, generation=1, name=None):
-        self.name = name if name else random.choice(NAMES_DB) + f" v{generation}"
+        self.id = next(_ids)
+        self.name = name if name else f"{random.choice(NAMES_DB)}-{self.id}"
         self.x = x
         self.y = y
         self.z = z
         self.generation = generation
-        
+
         # Core attributes (0-100 scale)
         self.health = 100.0
         self.energy = 100.0
         self.hunger = 0.0      # 0 is full, 100 is starving
         self.radiation = 0.0   # 0 is clean, 100 is lethal
-        
+
         # State
         self.age = 0
         self.role = "Unassigned"
+        self.forage_target = "supplies"  # "supplies" (water/biomass) or "scrap"
         self.status = "Idle"
+        self.cause_of_death = None
         self.has_reproduced_this_turn = False
-        
+        self._damage = {}
+
         # Genetics (traits default around 1.0, representing multiplier efficiency)
         if genes:
-            self.genes = genes
+            self.genes = dict(genes)
         else:
-            self.genes = {
-                "speed": round(random.uniform(0.6, 1.4), 2),
-                "foraging": round(random.uniform(0.6, 1.4), 2),
-                "rad_resistance": round(random.uniform(0.6, 1.4), 2),
-                "cold_resistance": round(random.uniform(0.6, 1.4), 2),
-                "intelligence": round(random.uniform(0.6, 1.4), 2)
-            }
+            self.genes = {g: round(random.uniform(0.6, 1.4), 2) for g in GENE_NAMES}
 
-    def tick(self, grid_cell):
-        """Apply basic metabolism and environmental factors based on current cell location."""
+    @property
+    def alive(self):
+        return self.health > 0
+
+    def _hurt(self, amount, cause):
+        """Apply damage and remember what is hurting us, so deaths are
+        attributed to the largest damage source rather than the last status."""
+        if amount <= 0:
+            return
+        self.health = max(0.0, self.health - amount)
+        self._damage[cause] = self._damage.get(cause, 0.0) + amount
+        if self.health <= 0 and self.cause_of_death is None:
+            self.cause_of_death = max(self._damage, key=self._damage.get)
+
+    def tick(self, grid_cell, protections=None):
+        """Apply metabolism and environmental factors for the current cell.
+
+        protections: optional dict of tech mitigations, e.g.
+        {"cold": 10, "radiation": 0.5, "cave_in": 0.3}.
+        """
+        protections = protections or {}
         self.age += 1
         self.has_reproduced_this_turn = False
-        
-        # Standard metabolism
-        # Speedier individuals burn energy and hunger faster
-        burn_rate = 3.0 + (self.genes["speed"] * 1.5)
-        self.hunger = min(100.0, self.hunger + burn_rate)
-        self.energy = max(0.0, self.energy - (1.5 + (self.genes["speed"] * 0.5)))
-        
-        # Process starvation
+        self._damage = {}
+        self.status = "Idle"
+
+        # Standard metabolism: speedier individuals burn faster.
+        self.hunger = min(100.0, self.hunger + 3.0 + self.genes["speed"] * 1.5)
+        self.energy = max(0.0, self.energy - (1.5 + self.genes["speed"] * 0.5))
+
         if self.hunger >= 80.0:
-            starve_dmg = (self.hunger - 80.0) * 0.5
-            self.health = max(0.0, self.health - starve_dmg)
+            self._hurt((self.hunger - 80.0) * 0.5, "Starvation")
             self.status = "Starving"
-        else:
-            self.status = "Idle"
-            
-        # Process radiation exposure (adjusted by resistance gene)
-        rad_exposure = grid_cell["radiation"]
-        if rad_exposure > 0:
-            absorbed = max(0.1, rad_exposure - (self.genes["rad_resistance"] * 12.0))
+
+        # Radiation exposure, reduced by gene and tech shielding.
+        rad_exposure = grid_cell["radiation"] * (1.0 - protections.get("radiation", 0.0))
+        absorbed = rad_exposure - self.genes["rad_resistance"] * 12.0
+        if absorbed > 0:
             self.radiation = min(100.0, self.radiation + absorbed * 0.5)
         else:
-            # Natural radiation flush when in clean areas
             self.radiation = max(0.0, self.radiation - 2.0)
-            
+
         if self.radiation > 30.0:
-            rad_dmg = (self.radiation - 30.0) * 0.3
-            self.health = max(0.0, self.health - rad_dmg)
+            self._hurt((self.radiation - 30.0) * 0.3, "Radiation")
             if self.status == "Idle":
                 self.status = "Sick"
 
-        # Process temperature exposure (cold mountain Z=1)
-        temp = grid_cell["temperature"]
+        # Cold exposure.
+        temp = grid_cell["temperature"] + protections.get("cold", 0.0)
         if temp < 10.0:
-            cold_severity = 10.0 - temp
-            absorbed_cold = max(0.0, cold_severity - (self.genes["cold_resistance"] * 10.0))
+            absorbed_cold = (10.0 - temp) - self.genes["cold_resistance"] * 10.0
             if absorbed_cold > 0:
-                self.health = max(0.0, self.health - absorbed_cold * 0.4)
+                self._hurt(absorbed_cold * 0.4, "Hypothermia")
                 if self.status == "Idle":
                     self.status = "Freezing"
-                    
-        # Toxicity exposure
+
+        # Toxicity exposure.
         toxicity = grid_cell["toxicity"]
+        if self.z == -1:
+            toxicity *= 1.0 - protections.get("radon", 0.0)
         if toxicity > 20:
-            tox_dmg = (toxicity - 20) * 0.2
-            self.health = max(0.0, self.health - tox_dmg)
+            self._hurt((toxicity - 20) * 0.2, "Toxic exposure")
             if self.status == "Idle":
                 self.status = "Poisoned"
 
-        # Slow passive healing if healthy, fed, and rested
-        if self.hunger < 40.0 and self.radiation < 15.0 and self.energy > 50.0 and temp >= 5.0 and toxicity < 10:
+        # Cave-ins: underground only, chance scales with local risk.
+        risk = grid_cell.get("cave_in_risk", 0) * (1.0 - protections.get("cave_in", 0.0))
+        if self.z == -1 and risk > 0 and random.random() < risk / 400.0:
+            self._hurt(random.uniform(15, 40), "Cave-in")
+            self.status = "Crushed"
+
+        # Slow passive healing if healthy, fed, and rested.
+        if (self.hunger < 40.0 and self.radiation < 15.0 and self.energy > 50.0
+                and temp >= 5.0 and toxicity < 10 and not self._damage):
             self.health = min(100.0, self.health + 4.0)
 
+    def _forage(self, cell, stockpile):
+        options = [o for o in FORAGE_TABLE.get(self.z, []) if cell[o[0]] > 0]
+        # Prefer our assigned target; among supplies, take whichever the
+        # colony is shortest on. Fall back to anything available here.
+        if self.forage_target == "scrap":
+            key = lambda o: (o[0] != "scrap", stockpile.get(o[0], 0))
+        else:
+            key = lambda o: (o[0] == "scrap", stockpile.get(o[0], 0))
+        ranked = sorted(options, key=key)
+        if not ranked:
+            return False
+        res, lo, hi, label = ranked[0]
+        amount = min(cell[res], max(1, int(random.randint(lo, hi) * self.genes["foraging"])))
+        cell[res] -= amount
+        stockpile[res] = stockpile.get(res, 0) + amount
+        self.status = f"Gathered {amount} {label}"
+        return True
+
     def perform_action(self, action_type, grid, tech_tree, stockpile):
-        """Execute the assigned action based on the coordinator's directive."""
+        """Execute the assigned action based on the coordinator's directive.
+
+        tech_tree is a pars.tech.TechTree (or None for actions that don't
+        need it).
+        """
         cell = grid.get_cell(self.x, self.y, self.z)
         if not cell:
             return
-        
-        # If too weak or starving, forced to rest or look for food locally
+
+        # If too weak or exhausted, forced to rest.
         if self.health < 20.0 or self.energy < 15.0:
             action_type = "Rest"
-            
+
         if action_type == "Forage":
-            # Decide what resource we need most or gather what's available
-            # Gather Scrap, Water, or Biomass depending on Z layer profile
-            gathered_any = False
-            
-            # Surface foraging
-            if self.z == 0:
-                # Prioritize based on stocks
-                if stockpile.get("water", 0) < stockpile.get("food", 0) and cell["water"] > 0:
-                    yield_amt = min(cell["water"], int(random.randint(5, 12) * self.genes["foraging"]))
-                    cell["water"] -= yield_amt
-                    stockpile["water"] += yield_amt
-                    self.status = f"Gathered {yield_amt} Water"
-                    gathered_any = True
-                elif cell["biomass"] > 0:
-                    yield_amt = min(cell["biomass"], int(random.randint(6, 14) * self.genes["foraging"]))
-                    cell["biomass"] -= yield_amt
-                    stockpile["biomass"] += yield_amt
-                    self.status = f"Gathered {yield_amt} Biomass"
-                    gathered_any = True
-                elif cell["scrap"] > 0:
-                    yield_amt = min(cell["scrap"], int(random.randint(4, 10) * self.genes["foraging"]))
-                    cell["scrap"] -= yield_amt
-                    stockpile["scrap"] += yield_amt
-                    self.status = f"Gathered {yield_amt} Scrap"
-                    gathered_any = True
-            
-            # Underground foraging
-            elif self.z == -1:
-                # Water/scrap
-                if cell["water"] > 0:
-                    yield_amt = min(cell["water"], int(random.randint(8, 15) * self.genes["foraging"]))
-                    cell["water"] -= yield_amt
-                    stockpile["water"] += yield_amt
-                    self.status = f"Gathered {yield_amt} Water"
-                    gathered_any = True
-                elif cell["scrap"] > 0:
-                    yield_amt = min(cell["scrap"], int(random.randint(2, 6) * self.genes["foraging"]))
-                    cell["scrap"] -= yield_amt
-                    stockpile["scrap"] += yield_amt
-                    self.status = f"Gathered {yield_amt} Bunker Scrap"
-                    gathered_any = True
-            
-            # Mountain foraging
-            elif self.z == 1:
-                if cell["biomass"] > 0:
-                    yield_amt = min(cell["biomass"], int(random.randint(3, 8) * self.genes["foraging"]))
-                    cell["biomass"] -= yield_amt
-                    stockpile["biomass"] += yield_amt
-                    self.status = f"Gathered {yield_amt} Alpine Biomass"
-                    gathered_any = True
-                elif cell["scrap"] > 0:
-                    yield_amt = min(cell["scrap"], int(random.randint(3, 8) * self.genes["foraging"]))
-                    cell["scrap"] -= yield_amt
-                    stockpile["scrap"] += yield_amt
-                    self.status = f"Gathered {yield_amt} High Wreckage"
-                    gathered_any = True
-
-            if not gathered_any:
-                # Nothing left in this cell, auto-move to find some
-                self.wander(grid)
+            if not self._forage(cell, stockpile):
+                self.move_to_richest_neighbor(grid)
                 self.status = "Cell Empty, Searching..."
-
-            # Foraging consumes extra energy/hunger
             self.energy = max(0.0, self.energy - 8.0)
-            self.hunger = min(100.0, self.hunger + 5.0)
-
-        elif action_type == "Research":
-            # Add research points based on Intelligence gene
-            research_gain = int(random.randint(2, 6) * self.genes["intelligence"])
-            if tech_tree:
-                tech_tree["points"] += research_gain
-            self.status = f"Researched +{research_gain} Points"
-            self.energy = max(0.0, self.energy - 6.0)
             self.hunger = min(100.0, self.hunger + 3.0)
 
+        elif action_type == "Research":
+            gain = int(random.randint(2, 6) * self.genes["intelligence"])
+            if tech_tree is not None:
+                tech_tree.research_points += gain
+            self.status = f"Researched +{gain} RP"
+            self.energy = max(0.0, self.energy - 6.0)
+            self.hunger = min(100.0, self.hunger + 2.0)
+
         elif action_type == "Construct":
-            # If we are constructing, we consume scrap to advance tech projects
-            if tech_tree and tech_tree["current_project"]:
-                proj = tech_tree["current_project"]
-                needed = tech_tree["projects"][proj]["cost"] - tech_tree["projects"][proj]["progress"]
+            proj_name = tech_tree.current_project if tech_tree else None
+            if proj_name:
+                proj = tech_tree.projects[proj_name]
+                needed = proj["cost"] - proj["progress"]
                 if needed > 0 and stockpile["scrap"] > 0:
-                    spent = min(stockpile["scrap"], random.randint(3, 8), needed)
+                    rate = random.randint(4, 9) * (0.5 + self.genes["intelligence"] / 2)
+                    spent = min(stockpile["scrap"], max(1, int(rate)), needed)
                     stockpile["scrap"] -= spent
-                    tech_tree["projects"][proj]["progress"] += spent
-                    self.status = f"Built {spent} on {proj}"
+                    proj["progress"] += spent
+                    self.status = f"Built {spent} on {proj_name}"
                 else:
-                    self.status = "No Construct Project/Scrap"
+                    self.status = "No Scrap to Build"
             else:
-                self.status = "Idle Construct"
+                self.status = "Nothing to Build"
             self.energy = max(0.0, self.energy - 10.0)
-            self.hunger = min(100.0, self.hunger + 6.0)
+            self.hunger = min(100.0, self.hunger + 4.0)
 
         elif action_type == "Rest":
-            # Restores health and energy, lowers hunger burn slightly
             self.energy = min(100.0, self.energy + 25.0)
-            # Resting flushes a little radiation
             self.radiation = max(0.0, self.radiation - 1.0)
-            self.status = "Resting"
+            if self.status == "Idle":
+                self.status = "Resting"
 
     def move_towards(self, target_z, grid):
-        """Move 1 step vertically or horizontally towards a destination."""
-        # 1. Handle vertical movement first (climb up/down)
+        """Move 1 step vertically, or horizontally once on the right level."""
         if self.z != target_z:
             if target_z > self.z:
                 self.z += 1
                 self.status = "Climbed Up"
             else:
                 self.z -= 1
-                self.status = "Descended Down"
-            self.energy = max(0.0, self.energy - 10.0)
+                self.status = "Descended"
+            self.energy = max(0.0, self.energy - 10.0 / max(0.5, self.genes["speed"]))
             return
+        self.move_to_richest_neighbor(grid)
 
-        # 2. Horizontal movement if already on the correct level
-        # Move randomly towards the center or wander on that level
-        self.wander(grid)
+    def _neighbors(self, grid):
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nx, ny = self.x + dx, self.y + dy
+            if 0 <= nx < grid.width and 0 <= ny < grid.height:
+                yield nx, ny
+
+    def _step_to(self, nx, ny):
+        self.x, self.y = nx, ny
+        self.status = f"Moved to ({nx},{ny})"
+        self.energy = max(0.0, self.energy - 4.0)
 
     def wander(self, grid):
-        """Move 1 step horizontally on the current Z level."""
-        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        dx, dy = random.choice(directions)
-        new_x = max(0, min(grid.width - 1, self.x + dx))
-        new_y = max(0, min(grid.height - 1, self.y + dy))
-        if new_x != self.x or new_y != self.y:
-            self.x = new_x
-            self.y = new_y
-            self.status = f"Moved to ({new_x},{new_y})"
-            self.energy = max(0.0, self.energy - 4.0)
+        """Move 1 random step horizontally on the current Z level."""
+        options = list(self._neighbors(grid))
+        if options:
+            self._step_to(*random.choice(options))
 
-    def feed(self, food_stock, water_stock):
-        """Consume food and water from the stockpiles to reduce hunger."""
-        if self.hunger > 20:
-            # Eat food
-            food_needed = int(self.hunger / 10)
-            if food_needed > 0:
-                eaten = min(food_stock[0], food_needed)
-                food_stock[0] -= eaten
-                self.hunger = max(0.0, self.hunger - (eaten * 15))
-            
-            # Drink water
-            water_needed = int(self.hunger / 10)
-            if water_needed > 0:
-                drunk = min(water_stock[0], water_needed)
-                water_stock[0] -= drunk
-                self.hunger = max(0.0, self.hunger - (drunk * 15))
+    def move_to_richest_neighbor(self, grid):
+        """Step to the adjacent cell with the most resources, ties random."""
+        options = list(self._neighbors(grid))
+        if not options:
+            return
+        random.shuffle(options)
 
-    def reproduce(self, partner, grid):
+        def richness(pos):
+            c = grid.get_cell(pos[0], pos[1], self.z)
+            return c["water"] + c["biomass"] + c["scrap"] - c["toxicity"] - c["radiation"] * 0.5
+
+        self._step_to(*max(options, key=richness))
+
+    def feed(self, stockpile):
+        """Eat biomass and drink water from the colony stockpile."""
+        if self.hunger <= 20:
+            return
+        want = self.hunger - 10.0
+        # Split roughly 60/40 between food and water.
+        food = min(stockpile["biomass"], int(want * 0.6 / HUNGER_PER_BIOMASS + 0.999))
+        stockpile["biomass"] -= food
+        water = min(stockpile["water"], int(want * 0.4 / HUNGER_PER_WATER + 0.999))
+        stockpile["water"] -= water
+        relief = food * HUNGER_PER_BIOMASS + water * HUNGER_PER_WATER
+        # Without water, food alone only half-satisfies (dehydration).
+        if water == 0:
+            relief *= 0.5
+        self.hunger = max(0.0, self.hunger - relief)
+
+    def reproduce(self, partner, grid=None):
         """Cross-over genetics with a partner to create a mutated offspring."""
-        # Children are spawned at the parents' location
         child_genes = {}
         for gene_name in self.genes:
-            # Mix parents genes with a 10% mutation chance
-            mixed_gene = (self.genes[gene_name] + partner.genes[gene_name]) / 2.0
-            if random.random() < 0.15:  # Mutated
-                mutation = random.uniform(-0.25, 0.25)
-                mixed_gene = max(0.1, round(mixed_gene + mutation, 2))
-            else:
-                mixed_gene = round(mixed_gene, 2)
-            child_genes[gene_name] = mixed_gene
-            
+            # Uniform crossover plus blending, with a 15% mutation chance.
+            parent_val = random.choice((self.genes[gene_name], partner.genes[gene_name]))
+            mixed = (parent_val + (self.genes[gene_name] + partner.genes[gene_name]) / 2.0) / 2.0
+            if random.random() < 0.15:
+                mixed += random.uniform(-0.25, 0.25)
+            child_genes[gene_name] = round(max(0.1, min(3.0, mixed)), 2)
+
         child_generation = max(self.generation, partner.generation) + 1
-        child = Survivor(x=self.x, y=self.y, z=self.z, genes=child_genes, generation=child_generation)
-        
-        # Deduct energy from parents for reproduction
+        child = Survivor(x=self.x, y=self.y, z=self.z, genes=child_genes,
+                         generation=child_generation)
+        child.hunger = 30.0
+
         self.energy = max(5.0, self.energy - 35.0)
         partner.energy = max(5.0, partner.energy - 35.0)
         self.has_reproduced_this_turn = True
         partner.has_reproduced_this_turn = True
-        
         return child

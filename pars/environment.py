@@ -1,10 +1,10 @@
 import random
 
 class Grid3D:
-    def __init__(self, width=5, height=5, z_levels=[-1, 0, 1]):
+    def __init__(self, width=5, height=5, z_levels=(-1, 0, 1)):
         self.width = width
         self.height = height
-        self.z_levels = z_levels  # -1: Underground, 0: Surface, 1: Mountains
+        self.z_levels = list(z_levels)  # -1: Underground, 0: Surface, 1: Mountains
         self.grid = {}
         
         # Initialize nodes
@@ -55,28 +55,33 @@ class Grid3D:
                 cell["temperature"] = -5                     # Cold
                 cell["toxicity"] = random.randint(0, 5)
 
-    def generate_forecast(self):
-        """Generate a disaster forecast for the next 5 turns."""
-        disasters = ["None", "Acid Rain", "Blizzard", "Solar Flare", "Radon Leak", "Cave-In Threat"]
-        self.disaster_forecast = [random.choice(disasters) for _ in range(5)]
+    DISASTERS = ("Acid Rain", "Blizzard", "Solar Flare", "Radon Leak", "Cave-In Threat")
+    CALM_WEIGHT = 0.8  # chance a calm turn stays calm
+
+    def _roll_weather(self):
+        if random.random() < self.CALM_WEIGHT:
+            return "None"
+        return random.choice(self.DISASTERS)
+
+    def generate_forecast(self, length=5):
+        """Fill the forecast queue. Entry i is what happens on the (i+1)-th
+        calm turn from now, so the forecast is accurate: it only advances
+        while no disaster is active."""
+        while len(self.disaster_forecast) < length:
+            self.disaster_forecast.append(self._roll_weather())
 
     def tick(self):
         """Advance environment state, applying natural decay and active disaster hazards."""
-        # Handle current disaster countdown
         if self.disaster_duration > 0:
             self.disaster_duration -= 1
             if self.disaster_duration == 0:
                 self.current_disaster = "None"
-        
-        # If no disaster is running, roll for a new one from forecast or list
-        if self.current_disaster == "None" and random.random() < 0.2:
-            if self.disaster_forecast:
-                self.current_disaster = self.disaster_forecast.pop(0)
-            else:
-                self.current_disaster = random.choice(["Acid Rain", "Blizzard", "Solar Flare", "Radon Leak", "Cave-In Threat"])
-            
-            self.disaster_duration = random.randint(2, 4)
+        elif self.current_disaster == "None":
+            upcoming = self.disaster_forecast.pop(0)
             self.generate_forecast()
+            if upcoming != "None":
+                self.current_disaster = upcoming
+                self.disaster_duration = random.randint(2, 4)
 
         # Apply disaster impacts across layers
         for (x, y, z), cell in self.grid.items():
@@ -85,6 +90,21 @@ class Grid3D:
                 cell["biomass"] += random.randint(1, 3)
             elif z == 1 and cell["biomass"] < 40:
                 cell["biomass"] += random.choice([0, 1])
+            elif z == -1 and cell["biomass"] < 10:
+                cell["biomass"] += random.choice([0, 0, 1])  # fungi
+
+            # Water: aquifers recharge underground, rain refills the
+            # surface, snowmelt feeds the mountains (more during blizzards).
+            if z == -1 and cell["water"] < 40:
+                cell["water"] += random.randint(0, 2)
+            elif z == 0 and cell["water"] < 30 and self.current_disaster in ("None", "Blizzard"):
+                cell["water"] += random.randint(0, 2)
+            elif z == 1 and cell["water"] < 20:
+                cell["water"] += random.randint(1, 3) if self.current_disaster == "Blizzard" else random.choice([0, 1])
+
+            # Scrap: shifting ruins slowly expose more salvage.
+            if cell["scrap"] < 30 and random.random() < 0.08:
+                cell["scrap"] += random.randint(1, 3)
 
             # Apply disaster consequences
             if self.current_disaster == "Acid Rain":
