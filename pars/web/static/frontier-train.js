@@ -199,7 +199,7 @@
   const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : def; };
   const years = +arg("years", 60), generations = +arg("generations", 12), pop = +arg("pop", 16);
   const perScenario = +arg("per-scenario", 6), elite = +arg("elite", 4);
-  const evalSeeds = +arg("eval-seeds", 24), valSeeds = +arg("val-seeds", 16);
+  const evalSeeds = +arg("eval-seeds", 24), valSeeds = +arg("val-seeds", 16), confirmSeeds = +arg("confirm-seeds", 30);
   const out = arg("out", path.join(__dirname, "frontier-brain.js"));
   const nWorkers = Math.max(1, Math.min(+arg("workers", os.cpus().length), 16));
   const t0 = Date.now();
@@ -300,8 +300,24 @@
       }
       const accept = pick.val > 0.5 && pick.val > 2 * pick.valErr;
       log(`  brain: best on validation ${sgn(pick.val)} ± ${pick.valErr.toFixed(2)} (gen ${pick.generation}) -> ${accept ? "ACCEPT" : "reject"}`);
-      perPlace[scenario] = { parts, brain: accept ? pick.brain : null, curve };
-      validation[scenario] = { parts: partGain, knowledge: { gain: kVal, err: kErr }, brain: { gain: pick.val, err: pick.valErr, accepted: accept, generation: pick.generation } };
+      // ---- 5. confirm the chosen bundle ONCE on games that played no part in
+      // choosing it. Picking the best of many lessons and generations on the
+      // validation games inflates their score there (the winner's curse);
+      // without this step, picks kept passing validation and losing on test.
+      const brain = accept ? pick.brain : null;
+      let confirm = null;
+      if (K || brain) {
+        const ce = placeEps(scenario, confirmSeeds * 2, 75000);
+        const nov = await scoreMany(ce);
+        const vet = await scoreMany(ce.map((e) => ({ ...e, knowledge: K, brain })));
+        const adv = vet.map((v, i) => v - nov[i]);
+        confirm = { gain: mean(adv), err: stderr(adv) };
+        confirm.accepted = confirm.gain > 0.5 && confirm.gain > 2 * confirm.err;
+        log(`  confirm on ${ce.length} unseen games: ${sgn(confirm.gain)} ± ${confirm.err.toFixed(2)} -> ${confirm.accepted ? "KEEP" : "drop (plays like the novice)"}`);
+      }
+      const keep = !!(confirm && confirm.accepted);
+      perPlace[scenario] = { parts: keep ? parts : [], brain: keep ? brain : null, curve };
+      validation[scenario] = { parts: partGain, knowledge: { gain: kVal, err: kErr }, brain: { gain: pick.val, err: pick.valErr, accepted: accept, generation: pick.generation }, confirm };
     }
 
     // ---- 5. final test on untouched seeds: novice vs veteran, per place
