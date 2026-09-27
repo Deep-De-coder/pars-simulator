@@ -83,6 +83,7 @@
       this.orders = [];
       this.stats = { harvested: 0, harvests: 0, deaths: 0, joined: 0, cropsLost: 0, built: {}, causes: {}, foodEaten: 0 };
       this.recentHarvest = []; // [day, food]
+      this.plotStats = { food: 0, plotDays: 0 }; // observed food per plot per day in this place
       this.power = { produced: 0, used: 0, stored: 0, capacity: 10, shortfall: [] };
       this.water = { produced: 0 };
       this.discoveries = {};
@@ -576,6 +577,7 @@
       const crop = t.crop, truth = CROPS[crop.type], b = this.beliefs.crops[crop.type];
       b.lost++;
       this.stats.cropsLost++;
+      this.plotStats.plotDays += crop.age;
       t.crop = null;
       this.note("event", `${truth.name} at (${t.x},${t.y}) died (${cause}).`);
       if (cause === "frost" && temp > b.frostKill) {
@@ -616,6 +618,7 @@
         }
       }
       b.harvested++;
+      this.plotStats.food += food; this.plotStats.plotDays += crop.age;
       this.inv.food += food;
       this.inv.compost += 2;
       const seedBack = this.R.randint(2, 4);
@@ -933,8 +936,12 @@
       // new fields
       const plantable = Object.values(this.seeds).some((n) => n > 0);
       // how many plots does it take to feed everyone, by our own beliefs?
+      // Farm size comes from the handbook's yields on purpose. Sizing it from
+      // learned yields (or observed harvests) was tried: accurate numbers made
+      // the colony plan more fields than it had hands to work, or fewer than
+      // power-limited places like Mars need. Learned yields still pick the crop.
       const perPlot = Math.max(0.15, ...Object.entries(this.seeds).filter(([, n]) => n > 0)
-        .map(([id]) => { const cb = this.beliefs.crops[id]; return cb.yield * cb.yieldFactor * 0.7 / cb.days; }), 0.15);
+        .map(([id]) => { const cb = this.beliefs.crops[id]; return cb.yield * 0.7 / cb.days; }), 0.15);
       const fieldsWanted = clamp(Math.ceil(pop / perPlot * this.brain.fieldsMult), pop, pop * 3);
       if (plantable && A.fields < fieldsWanted) {
         const sterile = this.sc.terrain.sterile;
@@ -952,9 +959,13 @@
       if (u.power > 0.1) {
         const horizon = 30;
         const b = this.beliefs.tech;
-        if (this.sc.terrain.river) buildOption("water_wheel", u.power * 6 * this.flowBelief() * horizon * 0.25, "the river keeps flowing day and night");
-        if (this.inv.panels > 0 || this.tiles.some((t) => t.type === "ruins" && t.salvage > 0)) buildOption("solar_array", u.power * b.solar_array.output * horizon * 0.25, `panels give ~${b.solar_array.output.toFixed(1)}/day here`);
-        buildOption("wind_turbine", u.power * b.wind_turbine.output * horizon * 0.25, `turbines give ~${b.wind_turbine.output.toFixed(1)}/day here`);
+        // While power is genuinely short, a weak source is still worth building:
+        // value it by the shortage it helps cover, with efficiency as a tiebreak.
+        const unmet = A.powerNeed - this.power.produced;
+        const worth = (out) => (unmet > 1 ? Math.max(out, Math.min(unmet, 4)) + out * 0.15 : out);
+        if (this.sc.terrain.river) buildOption("water_wheel", u.power * worth(6 * this.flowBelief()) * horizon * 0.25, "the river keeps flowing day and night");
+        if (this.inv.panels > 0 || this.tiles.some((t) => t.type === "ruins" && t.salvage > 0)) buildOption("solar_array", u.power * worth(b.solar_array.output) * horizon * 0.25, `panels give ~${b.solar_array.output.toFixed(1)}/day here${unmet > 1 ? `; we're ${unmet.toFixed(0)} short` : ""}`);
+        buildOption("wind_turbine", u.power * worth(b.wind_turbine.output) * horizon * 0.25, `turbines give ~${b.wind_turbine.output.toFixed(1)}/day here${unmet > 1 ? `; we're ${unmet.toFixed(0)} short` : ""}`);
         if (this.inv.compost > 8) buildOption("biogas", u.power * 2 * horizon * 0.2, "spare compost can make methane");
       }
       // --- growth
@@ -1031,7 +1042,8 @@
         if (!cost) continue;
         let value = (100 - s.hp) / 10 * b.repair * (["shelter", "well", "water_wheel", "ice_drill"].includes(s.type) ? 2 : 1);
         let why = `${Math.max(0, Math.round(s.hp))}% intact`;
-        if (quaking && H.quakeWait) { value *= 0.15; why += "; waiting for the aftershocks to pass"; }
+        const critical = s.hab || ["shelter", "ice_drill", "well", "water_wheel"].includes(s.type) && s.hp < 40;
+        if (quaking && H.quakeWait && !critical) { value *= 0.15; why += "; waiting for the aftershocks to pass"; }
         add({ label: `Repair the ${tech.name.toLowerCase()} at (${t.x},${t.y})`, need: tech.need === "materials" ? "safety" : tech.need, value, why, task: { kind: "repair", x: t.x, y: t.y, work: 1, req: cost }, skill: "building" });
       }
       // --- blight
@@ -1424,6 +1436,7 @@
       const place = k.places[this.scenarioId] || {};
       place.wells = this.beliefs.tech.well.byElev.map((b) => ({ ok: b.ok, fail: b.fail }));
       place.power = { wind_turbine: this.beliefs.tech.wind_turbine.output, solar_array: this.beliefs.tech.solar_array.output };
+
       if (this.discoveries.silt) place.silt = true;
       k.places[this.scenarioId] = place;
       if (this.discoveries.sunflower) k.sunflower = true;
@@ -1447,6 +1460,7 @@
         if (place.wells) this.beliefs.tech.well.byElev = place.wells.map((w) => ({ ...w }));
         if (place.power) { this.beliefs.tech.wind_turbine.output = place.power.wind_turbine; this.beliefs.tech.solar_array.output = place.power.solar_array; this.beliefs.tech.wind_turbine.samples = this.beliefs.tech.solar_array.samples = 25; }
         if (place.silt) this.discoveries.silt = true;
+
       }
       if (k.sunflower) this.discoveries.sunflower = true;
     }

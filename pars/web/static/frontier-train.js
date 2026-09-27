@@ -148,7 +148,35 @@
 
   function drain(gen, onStep) { let last; for (const v of gen) { last = v; if (onStep) onStep(v); } return last; }
 
-  const api = { SPACE, episodeScore, playYear, gatherKnowledge, trainBrain, compare, summarize, drain, vecToBrain, brainToVec };
+  // ---- knowledge is applied in parts; the trainer checks each part per place
+  const PARTS = ["cropLimits", "cropYields", "place", "boilWater", "fireAware", "quakeWait", "mixCrops", "ashFertile"];
+  const LESSON_TEXT = { boilWater: /boil/i, fireAware: /firebreak/i, quakeWait: /aftershock/i, mixCrops: /blight/i, ashFertile: /\bash\b/i };
+  function filterKnowledge(k, parts, scenario) {
+    if (!k || !parts || !parts.length) return null;
+    const P = new Set(parts);
+    const out = { years: k.years, crops: {}, hazard: { learned: [] }, places: {} };
+    for (const [id, c] of Object.entries(k.crops || {})) {
+      const e = { learned: [] };
+      if (P.has("cropLimits")) { e.minT = c.minT; e.frostKill = c.frostKill; e.flood = c.flood; e.learned.push(...(c.learned || []).filter((t) => !/yields/.test(t))); }
+      if (P.has("cropYields") && c.yieldFactor) { e.yieldFactor = c.yieldFactor; e.learned.push(...(c.learned || []).filter((t) => /yields/.test(t))); }
+      if (Object.keys(e).length > 1) out.crops[id] = e;
+    }
+    for (const key of Object.keys(LESSON_TEXT)) {
+      if (P.has(key) && k.hazard && k.hazard[key]) { out.hazard[key] = true; out.hazard.learned.push(...(k.hazard.learned || []).filter((t) => LESSON_TEXT[key].test(t))); }
+    }
+    if (P.has("place") && k.places && k.places[scenario]) out.places[scenario] = k.places[scenario];
+    if (P.has("cropLimits") && k.sunflower) out.sunflower = true;
+    return out;
+  }
+  // What the pre-trained veteran brings to a given place.
+  function veteranFor(trained, scenario) {
+    if (!trained) return { brain: null, knowledge: null };
+    const pp = (trained.perPlace || {})[scenario];
+    if (!pp) return { brain: trained.brain || null, knowledge: trained.knowledge || null };
+    return { brain: pp.brain || null, knowledge: filterKnowledge(trained.knowledge, pp.parts, scenario), parts: pp.parts };
+  }
+
+  const api = { SPACE, PARTS, episodeScore, playYear, gatherKnowledge, trainBrain, compare, summarize, drain, vecToBrain, brainToVec, filterKnowledge, veteranFor };
   if (isNode) module.exports = api;
   else root.FRONTIER_TRAIN = api;
 
@@ -207,61 +235,77 @@
 
   (async () => {
     log(`Using ${nWorkers} worker threads.`);
-    // ---- knowledge
+    const sgn = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
+    // ---- 1. knowledge
     log(`Stage 1: living ${years} simulated years to build knowledge...`);
     const kRun = [];
     const k = drain(gatherKnowledge({ years }), (s) => { kRun.push({ year: s.year, scenario: s.scenario, outcome: s.outcome, score: Math.round(s.score) }); }).knowledge;
-    const valEps = valEpisodes(valSeeds, 70000);
-    const noviceVal = await scoreMany(valEps.map((e) => ({ ...e })));
-    const knowVal = await scoreMany(valEps.map((e) => ({ ...e, knowledge: k })));
-    const kAdv = knowVal.map((v, i) => v - noviceVal[i]);
-    const useKnowledge = mean(kAdv) > -0.5; // knowledge is corrections toward the truth; keep unless it clearly hurts
-    log(`  knowledge vs novice on validation: ${mean(kAdv) >= 0 ? "+" : ""}${mean(kAdv).toFixed(2)} ± ${stderr(kAdv).toFixed(2)} per year -> ${useKnowledge ? "keep" : "DISCARD"}`);
-    const K = useKnowledge ? k : null;
+    const placeEps = (scenario, n, base) => Array.from({ length: n }, (_, i) => ({ scenario, seed: base + i, hazards: i % 2 ? "frequent" : "normal" }));
 
-    // ---- brain
-    log(`Stage 2: evolving decision weights (${generations} generations x ${pop} candidates x ${perScenario * SCENARIOS.length} paired games)...`);
-    const S = makeSampler(null, 11);
-    const baseBrain = vecToBrain(S.mean);
-    const curve = [];
-    const hall = []; // best candidate of each generation, for validation
-    for (let g = 0; g < generations; g++) {
-      const eps = episodesFor(g, perScenario, 20000);
-      const baseline = await scoreMany(eps.map((e) => ({ ...e, brain: baseBrain, knowledge: K })));
-      const vecs = S.sample(pop);
-      const scored = [];
-      for (const vec of vecs) {
-        const brain = vecToBrain(vec);
-        const adv = await advantage(brain, eps, K, baseline);
-        scored.push({ vec, brain, fitness: mean(adv) });
+    const perPlace = {};
+    const validation = {};
+    for (const scenario of SCENARIOS) {
+      log(`== ${D.SCENARIOS[scenario].name} ==`);
+      const val = placeEps(scenario, valSeeds * 2, 70000);
+      // ---- 2. which lessons help here? (paired, on validation games)
+      const novice = await scoreMany(val);
+      const partGain = {};
+      for (const part of PARTS) {
+        const kn = filterKnowledge(k, [part], scenario);
+        if (!kn) continue;
+        const r = await scoreMany(val.map((e) => ({ ...e, knowledge: kn })));
+        const adv = r.map((v, i) => v - novice[i]);
+        partGain[part] = { gain: mean(adv), err: stderr(adv) };
       }
-      const top = S.update(scored, elite);
-      hall.push({ brain: top[0].brain, trainFitness: top[0].fitness, generation: g + 1 });
-      const meanF = mean(scored.map((c) => c.fitness));
-      curve.push({ generation: g + 1, best: Math.round(top[0].fitness * 10) / 10, mean: Math.round(meanF * 10) / 10 });
-      const sgn = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
-      log(`  gen ${g + 1}: best ${sgn(top[0].fitness)}  mean ${sgn(meanF)} vs default (score points per year)`);
-    }
-    hall.push({ brain: vecToBrain(S.mean), trainFitness: null, generation: "final mean" });
+      let parts = Object.entries(partGain).filter(([, g]) => g.gain > 0.5 && g.gain > g.err).map(([p]) => p);
+      let K = filterKnowledge(k, parts, scenario);
+      let kVal = 0, kErr = 0;
+      if (K) {
+        const r = await scoreMany(val.map((e) => ({ ...e, knowledge: K })));
+        const adv = r.map((v, i) => v - novice[i]); kVal = mean(adv); kErr = stderr(adv);
+        if (kVal <= 0) { parts = []; K = null; } // parts that help alone but not together
+      }
+      log(`  lessons: ${Object.entries(partGain).map(([p, g]) => `${p} ${sgn(g.gain)}`).join(", ")}`);
+      log(`  keep: ${parts.length ? parts.join(", ") : "none"}${K ? ` (together ${sgn(kVal)} ± ${kErr.toFixed(2)})` : ""}`);
 
-    // ---- validation gate: pick the candidate that beats the default on unseen games
-    log(`Stage 3: validating ${hall.length} candidates on ${valEps.length} unseen games...`);
-    const baseVal = await scoreMany(valEps.map((e) => ({ ...e, brain: baseBrain, knowledge: K })));
-    let pick = null;
-    for (const h of hall) {
-      const adv = await advantage(h.brain, valEps, K, baseVal);
-      h.val = mean(adv); h.valErr = stderr(adv);
-      if (!pick || h.val > pick.val) pick = h;
+      // ---- 3. decision weights for this place (paired CEM)
+      const S = makeSampler(null, 11 + scenario.length);
+      const baseBrain = vecToBrain(S.mean);
+      const hall = [];
+      const curve = [];
+      for (let g = 0; g < generations; g++) {
+        const eps = placeEps(scenario, perScenario * 4, 20000 + g * 997);
+        const baseline = await scoreMany(eps.map((e) => ({ ...e, brain: baseBrain, knowledge: K })));
+        const scored = [];
+        for (const vec of S.sample(pop)) {
+          const brain = vecToBrain(vec);
+          scored.push({ vec, brain, fitness: mean(await advantage(brain, eps, K, baseline)) });
+        }
+        const top = S.update(scored, elite);
+        hall.push({ brain: top[0].brain, generation: g + 1 });
+        curve.push({ generation: g + 1, best: Math.round(top[0].fitness * 10) / 10, mean: Math.round(mean(scored.map((c) => c.fitness)) * 10) / 10 });
+      }
+      hall.push({ brain: vecToBrain(S.mean), generation: "final" });
+      log(`  search: best per generation ${curve.map((c) => sgn(c.best)).join(" ")}`);
+      // ---- 4. validation gate for the brain
+      const baseVal = await scoreMany(val.map((e) => ({ ...e, brain: baseBrain, knowledge: K })));
+      let pick = null;
+      for (const h of hall) {
+        const adv = await advantage(h.brain, val, K, baseVal);
+        h.val = mean(adv); h.valErr = stderr(adv);
+        if (!pick || h.val > pick.val) pick = h;
+      }
+      const accept = pick.val > 0.5 && pick.val > 2 * pick.valErr;
+      log(`  brain: best on validation ${sgn(pick.val)} ± ${pick.valErr.toFixed(2)} (gen ${pick.generation}) -> ${accept ? "ACCEPT" : "reject"}`);
+      perPlace[scenario] = { parts, brain: accept ? pick.brain : null, curve };
+      validation[scenario] = { parts: partGain, knowledge: { gain: kVal, err: kErr }, brain: { gain: pick.val, err: pick.valErr, accepted: accept, generation: pick.generation } };
     }
-    const accept = pick.val > 2 * pick.valErr && pick.val > 0.5;
-    log(`  best on validation: generation ${pick.generation}, ${pick.val >= 0 ? "+" : ""}${pick.val.toFixed(2)} ± ${pick.valErr.toFixed(2)} -> ${accept ? "ACCEPT" : "REJECT (no reliable gain; shipping default decisions)"}`);
-    const brain = accept ? pick.brain : null;
 
-    // ---- final test on a third, untouched set of seeds
-    log(`Stage 4: final test on ${evalSeeds} fresh seeds per place and disaster level...`);
-    async function compareParallel(extra) {
+    // ---- 5. final test on untouched seeds: novice vs veteran, per place
+    log(`Final test on ${evalSeeds} fresh seeds per place and disaster level...`);
+    async function compareParallel(forScenario) {
       const cells = [];
-      for (const scenario of SCENARIOS) for (const hazards of ["normal", "frequent"]) for (let i = 0; i < evalSeeds; i++) cells.push({ scenario, hazards, seed: 90000 + i, ...extra });
+      for (const scenario of SCENARIOS) for (const hazards of ["normal", "frequent"]) for (let i = 0; i < evalSeeds; i++) cells.push({ scenario, hazards, seed: 90000 + i, ...forScenario(scenario) });
       const res = await playMany(cells);
       const rows = {};
       cells.forEach((c, i) => {
@@ -272,17 +316,22 @@
       for (const r of Object.values(rows)) r.score = Math.round(r.score * 10) / 10;
       return rows;
     }
-    const byScenario = { novice: await compareParallel({}), knowledgeOnly: await compareParallel({ knowledge: K }), trained: await compareParallel({ knowledge: K, brain }) };
+    const trainedPayload = { knowledge: k, perPlace };
+    const byScenario = {
+      novice: await compareParallel(() => ({})),
+      allKnowledge: await compareParallel(() => ({ knowledge: k })),
+      veteran: await compareParallel((sc) => { const v = veteranFor(trainedPayload, sc); return { knowledge: v.knowledge, brain: v.brain }; }),
+    };
     const summary = Object.fromEntries(Object.entries(byScenario).map(([n, r]) => [n, summarize(r)]));
-    for (const [name, s] of Object.entries(summary)) log(`  ${name.padEnd(14)} thriving ${(s.thriving * 100).toFixed(0)}%  perished ${(s.perished * 100).toFixed(0)}%  score ${s.score.toFixed(1)}  deaths/yr ${s.deaths.toFixed(2)}`);
+    for (const [name, s] of Object.entries(summary)) log(`  ${name.padEnd(13)} thriving ${(s.thriving * 100).toFixed(0)}%  perished ${(s.perished * 100).toFixed(0)}%  score ${s.score.toFixed(1)}  deaths/yr ${s.deaths.toFixed(2)}`);
+    for (const sc of SCENARIOS) {
+      const f = (name) => { const r = ["normal", "frequent"].map((h) => byScenario[name][`${sc}/${h}`]); return `${r.reduce((a, x) => a + x.THRIVING, 0)}/${r.reduce((a, x) => a + x.SURVIVED, 0)}/${r.reduce((a, x) => a + x.PERISHED, 0)}`; };
+      log(`  ${sc.padEnd(12)} novice ${f("novice")}  all-knowledge ${f("allKnowledge")}  veteran ${f("veteran")}   (thriving/survived/perished)`);
+    }
 
     const payload = {
-      meta: {
-        created: new Date().toISOString().slice(0, 10), years, generations, pop, perScenario, evalSeeds, valSeeds,
-        knowledgeRun: kRun, curve, summary, byScenario,
-        validation: { knowledge: { advantage: mean(kAdv), stderr: stderr(kAdv), kept: useKnowledge }, brain: { generation: pick.generation, advantage: pick.val, stderr: pick.valErr, accepted: accept } },
-      },
-      brain, knowledge: K,
+      meta: { created: new Date().toISOString().slice(0, 10), years, generations, pop, perScenario, evalSeeds, valSeeds, knowledgeRun: kRun, summary, byScenario, validation },
+      knowledge: k, perPlace,
     };
     fs.writeFileSync(out, `/* Generated by frontier-train.js. Do not edit by hand. */\n(function (root) {\n  const TRAINED = ${JSON.stringify(payload)};\n  if (typeof module !== "undefined" && module.exports) module.exports = TRAINED; else root.FRONTIER_TRAINED = TRAINED;\n})(typeof window !== "undefined" ? window : globalThis);\n`);
     log(`Wrote ${out}`);

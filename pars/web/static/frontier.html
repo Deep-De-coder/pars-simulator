@@ -892,18 +892,30 @@ $("trigger").onclick = () => act(() => game.command({ type: "disaster", kind: $(
 const STORE_KEY = "pars-frontier-mine-v1";
 function loadMine() { try { const v = JSON.parse(localStorage.getItem(STORE_KEY)); return v && v.knowledge ? v : null; } catch (e) { return null; } }
 function saveMine(v) { try { localStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch (e) { /* storage may be blocked; keep in memory */ } }
-const PRE = window.FRONTIER_TRAINED && (window.FRONTIER_TRAINED.knowledge || window.FRONTIER_TRAINED.brain) ? window.FRONTIER_TRAINED : null;
+const TR = window.FRONTIER_TRAINED || null;
+// The veteran only exists if training found something that helps somewhere.
+const PRE = TR && TR.perPlace && Object.values(TR.perPlace).some((p) => (p.parts && p.parts.length) || p.brain) ? TR : null;
 const PRE_META = window.FRONTIER_TRAINED ? window.FRONTIER_TRAINED.meta : null;
 let mine = loadMine();
 let colonyChoice = PRE ? "veteran" : "novice";
-function colonyOf(choice) {
-  if (choice === "veteran" && PRE) return { brain: PRE.brain, knowledge: PRE.knowledge, years: PRE.knowledge ? PRE.knowledge.years : 0, gens: PRE.brain ? PRE.meta.generations : 0, label: "Pre-trained veteran" };
+const PART_LABEL = { cropLimits: "crop cold/frost/flood limits", cropYields: "crop yields", place: "local wells, power & soil", boilWater: "boil water", fireAware: "firebreak rings", quakeWait: "wait out aftershocks", mixCrops: "mix crops", ashFertile: "ash is fertile" };
+function colonyOf(choice, scenario) {
+  scenario = scenario || (state ? state.scenario.id : "river_flood");
+  if (choice === "veteran" && PRE) {
+    const v = FRONTIER_TRAIN.veteranFor(PRE, scenario);
+    return { brain: v.brain, knowledge: v.knowledge, parts: v.parts || [], years: PRE.knowledge.years, gens: v.brain ? PRE.meta.generations : 0, label: "Pre-trained veteran", full: PRE.knowledge };
+  }
   if (choice === "mine" && mine) return { ...mine, label: "Your trained colony" };
   return { brain: null, knowledge: null, years: 0, gens: 0, label: "Novice (handbook only)" };
 }
-function colonyBlurb(choice) {
-  const c = colonyOf(choice);
+function colonyBlurb(choice, scenario) {
+  const c = colonyOf(choice, scenario);
   if (choice === "novice") return "Starts with only the handbook, mistakes and all. You'll watch it learn.";
+  if (choice === "veteran") {
+    const name = FRONTIER_DATA.SCENARIOS[scenario || "river_flood"].name;
+    const parts = c.parts.length ? c.parts.map((p) => PART_LABEL[p] || p).join(", ") : "nothing (no lesson tested as helpful here)";
+    return `${c.years} simulated years across all five places. Here (${name}) it brings: ${parts}${c.brain ? "; plus decision weights tuned for this place" : ""}. Only lessons that tested as helpful here are used.`;
+  }
   return `${c.years} simulated years of knowledge${c.gens ? ` and ${c.gens} generations of evolved decisions` : ""}.`;
 }
 function pct(v) { return `${Math.round(v * 100)}%`; }
@@ -933,15 +945,24 @@ function renderTrain(s) {
   $("train-status").innerHTML = `${c}<div class="muted" style="margin-top:6px">Next new life: <b style="color:var(--ink)">${esc(colonyOf(colonyChoice).label)}</b> (choose in <i>New life…</i>).</div>`;
   if (PRE_META && !$("pre-summary").dataset.done && !$("tab-train").hidden) {
     const m = PRE_META, S = m.summary, V = m.validation || {};
-    $("pre-meta").textContent = `${m.years} years · ${m.generations} generations`;
+    $("pre-meta").textContent = `${m.years} years · ${m.generations} generations per place`;
     const sg = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
-    const verdict = V.brain ? `<div>${V.knowledge.kept ? "✓" : "✗"} <b>Knowledge</b> ${V.knowledge.kept ? "kept" : "discarded"}: ${sg(V.knowledge.advantage)} ± ${V.knowledge.stderr.toFixed(1)} points/year vs. novice on validation games.</div>
-      <div>${V.brain.accepted ? "✓" : "✗"} <b>Trained decisions</b> ${V.brain.accepted ? `accepted (generation ${V.brain.generation})` : "rejected: no reliable gain, so the veteran keeps the default decisions"}: ${sg(V.brain.advantage)} ± ${V.brain.stderr.toFixed(1)}.</div>` : "";
     const row = (name, v) => `<div>${name}</div><div class="num">${pct(v.thriving)}</div><div class="num">${pct(v.perished)}</div><div class="num">${v.deaths.toFixed(2)}</div><div class="num">${v.score.toFixed(1)}</div>`;
-    $("pre-summary").innerHTML = `${verdict}<div class="muted">Final test on ${m.evalSeeds} fresh seeds × 5 places × normal and frequent disasters (${m.evalSeeds * 10} years each), never used in training or validation:</div>
+    const places = Object.keys(V).map((sc) => {
+      const v = V[sc], pp = (TR.perPlace || {})[sc] || {};
+      const cnt = (name) => { const r = ["normal", "frequent"].map((h) => m.byScenario[name][`${sc}/${h}`]); return { t: r[0].THRIVING + r[1].THRIVING, p: r[0].PERISHED + r[1].PERISHED, n: 2 * m.evalSeeds }; };
+      const a = cnt("novice"), b = cnt("veteran");
+      return `<div class="hz"><div class="head"><b>${esc(FRONTIER_DATA.SCENARIOS[sc].name)}</b><span class="muted">thriving ${a.t}→<b style="color:var(--ink)">${b.t}</b>/${a.n} · perished ${a.p}→<b style="color:var(--ink)">${b.p}</b></span></div>
+        <div>Lessons kept: ${pp.parts && pp.parts.length ? pp.parts.map((p) => PART_LABEL[p] || p).join(", ") : "<span class='muted'>none</span>"}</div>
+        <div class="muted">Tested: ${Object.entries(v.parts).map(([p, g]) => `${PART_LABEL[p] || p} ${sg(g.gain)}`).join(" · ")}</div>
+        <div>Tuned decisions: ${v.brain.accepted ? `<span class="ok">accepted</span> (${sg(v.brain.gain)} ± ${v.brain.err.toFixed(1)} on validation)` : `<span class="muted">rejected (${sg(v.brain.gain)} ± ${v.brain.err.toFixed(1)}, not a reliable gain)</span>`}</div></div>`;
+    }).join("");
+    $("pre-summary").innerHTML = `<div class="muted">Each place: every lesson is tested on its own against the novice (points per year, validation games); only helpful ones are kept. Decision weights are searched per place and must beat the defaults on validation games. The final numbers use ${m.evalSeeds} fresh seeds × normal and frequent disasters that played no part in any choice.</div>
       <div class="cmp"><b>Colony</b><b style="text-align:right">Thriving</b><b style="text-align:right">Perished</b><b style="text-align:right">Deaths/yr</b><b style="text-align:right">Score</b>
-      ${row("Novice", S.novice)}${row("+ knowledge", S.knowledgeOnly)}${row("+ trained decisions", S.trained)}</div>`;
-    drawCurve($("pre-curve"), m.curve, [["best", "#b58cf0", "best"], ["mean", "#62b879", "average"]]);
+      ${row("Novice", S.novice)}${row("All knowledge, everywhere", S.allKnowledge)}${row("Veteran (selective)", S.veteran)}</div>${places}`;
+    const curve = (TR.perPlace && TR.perPlace[state.scenario.id] && TR.perPlace[state.scenario.id].curve) || [];
+    $("pre-curve").hidden = !curve.length;
+    if (curve.length) drawCurve($("pre-curve"), curve, [["best", "#b58cf0", "best"], ["mean", "#62b879", "average"]]);
     $("pre-summary").dataset.done = "1";
   }
   const b = s.brain;
@@ -963,7 +984,9 @@ function runChunked(gen, onStep, onDone) {
 }
 function startTraining(kind) {
   if (training) return;
-  const base = colonyOf(colonyChoice);
+  const base0 = colonyOf(colonyChoice);
+  // in-page training covers all places, so a veteran starts from its full knowledge
+  const base = colonyChoice === "veteran" ? { ...base0, knowledge: base0.full, brain: null } : base0;
   const T = window.FRONTIER_TRAIN;
   const seed = Math.floor(Math.random() * 1e6);
   $("train-stop").hidden = false; $("train-years").disabled = $("train-brain").disabled = true;
@@ -1019,8 +1042,15 @@ function openNew() {
     <div><b>${esc(sc.name)}</b> <span class="tag">${LEVEL[id] || ""}</span><small>${esc(sc.blurb)}</small><small><b style="color:var(--ink)">Needs:</b> ${esc(sc.needs)}</small></div></label>`).join("");
   const choices = ["novice", ...(PRE ? ["veteran"] : []), ...(mine ? ["mine"] : [])];
   if (!choices.includes(colonyChoice)) colonyChoice = choices[choices.length - 1];
-  $("colony-list").innerHTML = `<h3>Who goes?</h3>` + choices.map((c) => `<label><input type="radio" name="colony" value="${c}" ${c === colonyChoice ? "checked" : ""}>
-    <div><b>${esc(colonyOf(c).label)}</b><small>${esc(colonyBlurb(c))}</small></div></label>`).join("");
+  const drawColonies = () => {
+    const scen = (document.querySelector('input[name="scen"]:checked') || {}).value || cur;
+    const picked = (document.querySelector('input[name="colony"]:checked') || {}).value || colonyChoice;
+    $("colony-list").innerHTML = `<h3>Who goes?</h3>` + choices.map((c) => `<label><input type="radio" name="colony" value="${c}" ${c === picked ? "checked" : ""}>
+      <div><b>${esc(colonyOf(c, scen).label)}</b><small>${esc(colonyBlurb(c, scen))}</small></div></label>`).join("");
+  };
+  $("colony-list").innerHTML = "";
+  drawColonies();
+  document.querySelectorAll('input[name="scen"]').forEach((r) => r.addEventListener("change", drawColonies));
   $("nd-hazards").innerHTML = FRONTIER_DATA ? Object.keys(FRONTIER_DATA.HAZARD_LEVELS).map((l) => `<option value="${l}" ${state && state.hazards === l ? "selected" : ""}>${l[0].toUpperCase() + l.slice(1)}</option>`).join("") : "";
   $("nd-err").textContent = "";
   $("newdlg").showModal();
@@ -1034,7 +1064,7 @@ $("newform").addEventListener("submit", (e) => {
   try {
     setPlaying(false);
     colonyChoice = (document.querySelector('input[name="colony"]:checked') || {}).value || colonyChoice;
-    const col = colonyOf(colonyChoice);
+    const col = colonyOf(colonyChoice, scen);
     currentKnowledge = col.knowledge; currentBrain = col.brain; currentGens = col.gens || 0;
     state = game.new({ scenario: scen, seed: $("nd-seed").value, hazards: $("nd-hazards").value || "normal", brain: col.brain, knowledge: col.knowledge });
     selected = null; bannerSeen = -1; seenLog = state.log.length;
@@ -1044,7 +1074,7 @@ $("newform").addEventListener("submit", (e) => {
 
 (function boot() {
   resize();
-  const col = colonyOf(colonyChoice);
+  const col = colonyOf(colonyChoice, "river_flood");
   currentKnowledge = col.knowledge; currentBrain = col.brain; currentGens = col.gens || 0;
   game = FRONTIER.createFrontier({ scenario: "river_flood", seed: 7, brain: col.brain, knowledge: col.knowledge });
   state = game.state();
