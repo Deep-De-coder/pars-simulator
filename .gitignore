@@ -40,15 +40,14 @@ ENV/
 
 # PyTest
 .pytest_cache/
-.pytst/
 
 # Coverage
 htmlcov/
 .coverage
-.coerage.*
+.coverage.*
 .cache
 nosetests.xml
-coverge.xml
+coverage.xml
 *.cover
 .hypothesis/
 
@@ -61,6 +60,7 @@ coverge.xml
 # Env
 .env
 .env.local
-ITEOF
-echo ".gitignore created"
-ls -la .gitignore
+
+# PARS run outputs
+runs/
+*.jsonl

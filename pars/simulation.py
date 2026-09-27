@@ -8,13 +8,21 @@ from pars.environment import Grid3D
 from pars.survivor import Survivor
 from pars.coordinator import CoordinatorAgent
 from pars.tech import TechTree
-from pars.dashboard import render_frame
 
 
 class Simulation:
-    def __init__(self, width=5, height=5, starting_population=6, seed=None):
+    def __init__(self, width=5, height=5, starting_population=6, seed=None,
+                 renderer=None):
+        if width < 3 or height < 3:
+            raise ValueError("Grid must be at least 3x3")
+        if starting_population < 1:
+            raise ValueError("Starting population must be at least 1")
         if seed is not None:
             random.seed(seed)
+
+        # renderer(sim) is called once per turn; None runs headless.
+        self.renderer = renderer
+        self.last_intel = None
 
         self.width = width
         self.height = height
@@ -52,8 +60,7 @@ class Simulation:
         if result:
             self.running = False
             self.game_over_reason = result
-            render_frame(self.grid, self.survivors, intel, self.stockpile,
-                         self.tech_tree, self.coordinator, self.turn)
+            self._render(intel)
             return intel
 
         plan = self.coordinator.formulate_plan(self.survivors, intel, self.stockpile)
@@ -110,8 +117,7 @@ class Simulation:
             self.coordinator.thought_log.append(f"\u2705 Tech completed: {t}")
 
         intel = self.coordinator.gather_intel(self.survivors, self.stockpile)
-        render_frame(self.grid, self.survivors, intel, self.stockpile,
-                     self.tech_tree, self.coordinator, self.turn)
+        self._render(intel)
 
         result = self.coordinator.check_win_lose(self.survivors, intel, self.stockpile)
         if result:
@@ -119,6 +125,11 @@ class Simulation:
             self.game_over_reason = result
 
         return intel
+
+    def _render(self, intel):
+        self.last_intel = intel
+        if self.renderer:
+            self.renderer(self)
 
     def _sync_research_points(self):
         total_intelligence = sum(s.genes["intelligence"] for s in self.survivors if s.health > 0)
@@ -185,5 +196,6 @@ class Simulation:
                 self.game_over_reason = "MAX_TURNS_REACHED"
                 break
             self.tick()
-            time.sleep(delay_ms / 1000.0)
+            if delay_ms > 0:
+                time.sleep(delay_ms / 1000.0)
         return self.game_over_reason

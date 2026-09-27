@@ -10,9 +10,6 @@ from rich.layout import Layout
 from rich.text import Text
 from rich.live import Live
 from rich import box
-from rich.columns import Columns
-
-import time
 
 console = Console()
 
@@ -223,7 +220,28 @@ def build_layout(grid, survivors, intel, stockpile, tech_tree, coordinator, turn
 
 
 def render_frame(grid, survivors, intel, stockpile, tech_tree, coordinator, turn):
-    """Render one complete frame to the terminal."""
+    """Render one complete frame to the terminal (non-live fallback)."""
     layout = build_layout(grid, survivors, intel, stockpile, tech_tree, coordinator, turn)
     console.clear()
     console.print(layout)
+
+
+class Dashboard:
+    """Flicker-free live dashboard; use as a context manager and pass as the
+    simulation renderer."""
+
+    def __init__(self):
+        self._live = Live(console=console, screen=True, auto_refresh=False)
+
+    def __enter__(self):
+        self._live.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._live.__exit__(*exc)
+
+    def __call__(self, sim):
+        layout = build_layout(sim.grid, sim.survivors, sim.last_intel,
+                              sim.stockpile, sim.tech_tree, sim.coordinator,
+                              sim.turn)
+        self._live.update(layout, refresh=True)
