@@ -115,6 +115,8 @@ Every run ends with a report: outcome, score, tech timeline, deaths by cause, an
 
 ## Dashboard
 
+![PARS dashboard, seed 42, turn 85](docs/dashboard-turn85.svg)
+
 - **Header**: active disaster, 3-step forecast, difficulty, doctrine, escalation.
 - **3D maps**: one slice per level with average radiation, toxicity and temperature. Symbols: `◉` survivor (`⚠` in distress, `⚕` badly hurt); hazards `☣` toxic, `☢` irradiated, `▼` cave-in risk, `❄` freezing; resources `♣` biomass, `≈` water, `■` scrap.
 - **Colony stats**: vitals, stockpile, RP, population per level, latest generation and gene averages.
