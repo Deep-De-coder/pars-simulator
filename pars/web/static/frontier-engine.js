@@ -557,9 +557,9 @@
           belief.coldDays++;
           if (belief.coldDays >= 4) {
             const old = belief.minT;
-            belief.minT = Math.round(temp + 1);
+            belief.minT = Math.max(old, Math.round(temp)); // the stall temperature is the estimate; no safety margin that compounds over years
             belief.coldDays = 0;
-            this.learn(crop.type, `${truth.name} stops growing below about ${belief.minT} °C (handbook said ${old} °C).`);
+            if (belief.minT !== old) this.learn(crop.type, `${truth.name} stops growing below about ${belief.minT} °C (we thought ${old} °C).`);
           }
         }
         if (crop.growth >= 1) crop.ripe = true;
@@ -580,8 +580,8 @@
       this.note("event", `${truth.name} at (${t.x},${t.y}) died (${cause}).`);
       if (cause === "frost" && temp > b.frostKill) {
         const old = b.frostKill;
-        b.frostKill = Math.ceil(temp + 1);
-        this.learn(crop.type, `${truth.name} is killed by frost at ${temp.toFixed(0)} °C (handbook said it survives to ${old} °C).`);
+        b.frostKill = Math.ceil(temp); // it died at this temperature, so it can't take this much cold
+        this.learn(crop.type, `${truth.name} is killed by frost at ${temp.toFixed(0)} °C (we thought it survives to ${old} °C).`);
       }
       if (cause === "flood" && b.flood) {
         b.flood = false;
@@ -595,7 +595,10 @@
     harvest(t, s) {
       const crop = t.crop, truth = CROPS[crop.type], b = this.beliefs.crops[crop.type];
       const food = Math.round(truth.yield * crop.health * (0.5 + 0.5 * t.fert) * (1 - t.contam * 0.8) * (1 - Math.max(0, t.salt - truth.saltTol) * 0.9) * (0.9 + 0.2 * s.skills.farming / 1.5));
-      const expected = b.yield * crop.health * (0.5 + 0.5 * crop.fertAtPlant) * b.yieldFactor;
+      // expect what the handbook says after local salt and contamination, so
+      // the correction learns about the crop, not about this particular field
+      const expected = b.yield * crop.health * (0.5 + 0.5 * crop.fertAtPlant) * b.yieldFactor
+        * (1 - t.contam * 0.8) * (1 - Math.max(0, t.salt - truth.saltTol) * 0.9);
       const ratio = food / Math.max(1, expected);
       b.yieldFactor = clamp(b.yieldFactor + (ratio - 1) * 0.35 * b.yieldFactor, 0.2, 2);
       if (b.harvested === 1 && Math.abs(b.yieldFactor - 1) > 0.2) {

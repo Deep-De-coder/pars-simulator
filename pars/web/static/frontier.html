@@ -280,7 +280,7 @@
         <h3>Pre-trained veteran <em id="pre-meta"></em></h3>
         <div id="pre-summary" style="font-size:12px;display:grid;gap:6px"></div>
         <canvas class="chart" id="pre-curve" height="120" aria-label="Training curve"></canvas>
-        <div class="muted" style="font-size:11px">Evolution of the colony's decision weights: score of the best and average candidate per generation, each playing the same games.</div>
+        <div class="muted" style="font-size:11px">Decision-weight search: how many score points per year the best and average candidate gained over the starting colony, playing the very same games (same places, seeds and disasters). Each generation plays new games, so the line is noisy.</div>
       </section>
       <section>
         <h3>Train it yourself <em>runs in this page</em></h3>
@@ -892,11 +892,12 @@ $("trigger").onclick = () => act(() => game.command({ type: "disaster", kind: $(
 const STORE_KEY = "pars-frontier-mine-v1";
 function loadMine() { try { const v = JSON.parse(localStorage.getItem(STORE_KEY)); return v && v.knowledge ? v : null; } catch (e) { return null; } }
 function saveMine(v) { try { localStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch (e) { /* storage may be blocked; keep in memory */ } }
-const PRE = window.FRONTIER_TRAINED || null;
+const PRE = window.FRONTIER_TRAINED && (window.FRONTIER_TRAINED.knowledge || window.FRONTIER_TRAINED.brain) ? window.FRONTIER_TRAINED : null;
+const PRE_META = window.FRONTIER_TRAINED ? window.FRONTIER_TRAINED.meta : null;
 let mine = loadMine();
 let colonyChoice = PRE ? "veteran" : "novice";
 function colonyOf(choice) {
-  if (choice === "veteran" && PRE) return { brain: PRE.brain, knowledge: PRE.knowledge, years: PRE.knowledge.years, gens: PRE.meta.generations, label: "Pre-trained veteran" };
+  if (choice === "veteran" && PRE) return { brain: PRE.brain, knowledge: PRE.knowledge, years: PRE.knowledge ? PRE.knowledge.years : 0, gens: PRE.brain ? PRE.meta.generations : 0, label: "Pre-trained veteran" };
   if (choice === "mine" && mine) return { ...mine, label: "Your trained colony" };
   return { brain: null, knowledge: null, years: 0, gens: 0, label: "Novice (handbook only)" };
 }
@@ -930,11 +931,14 @@ function renderTrain(s) {
   const c = s.trained ? `<b>Veteran colony.</b> Started with ${s.knowledgeYears} simulated years of knowledge${s.trained ? " and trained decision weights" : ""}. Inherited lessons show as "Inherited" in the Handbook.`
     : `<b>Novice colony.</b> Started with only the handbook, so it learns everything the hard way.`;
   $("train-status").innerHTML = `${c}<div class="muted" style="margin-top:6px">Next new life: <b style="color:var(--ink)">${esc(colonyOf(colonyChoice).label)}</b> (choose in <i>New life…</i>).</div>`;
-  if (PRE && !$("pre-summary").dataset.done && !$("tab-train").hidden) {
-    const m = PRE.meta, S = m.summary;
+  if (PRE_META && !$("pre-summary").dataset.done && !$("tab-train").hidden) {
+    const m = PRE_META, S = m.summary, V = m.validation || {};
     $("pre-meta").textContent = `${m.years} years · ${m.generations} generations`;
+    const sg = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+    const verdict = V.brain ? `<div>${V.knowledge.kept ? "✓" : "✗"} <b>Knowledge</b> ${V.knowledge.kept ? "kept" : "discarded"}: ${sg(V.knowledge.advantage)} ± ${V.knowledge.stderr.toFixed(1)} points/year vs. novice on validation games.</div>
+      <div>${V.brain.accepted ? "✓" : "✗"} <b>Trained decisions</b> ${V.brain.accepted ? `accepted (generation ${V.brain.generation})` : "rejected: no reliable gain, so the veteran keeps the default decisions"}: ${sg(V.brain.advantage)} ± ${V.brain.stderr.toFixed(1)}.</div>` : "";
     const row = (name, v) => `<div>${name}</div><div class="num">${pct(v.thriving)}</div><div class="num">${pct(v.perished)}</div><div class="num">${v.deaths.toFixed(2)}</div><div class="num">${v.score.toFixed(1)}</div>`;
-    $("pre-summary").innerHTML = `<div class="muted">Tested on ${m.evalSeeds} unseen seeds × 5 places × normal and frequent disasters (${m.evalSeeds * 10} years each):</div>
+    $("pre-summary").innerHTML = `${verdict}<div class="muted">Final test on ${m.evalSeeds} fresh seeds × 5 places × normal and frequent disasters (${m.evalSeeds * 10} years each), never used in training or validation:</div>
       <div class="cmp"><b>Colony</b><b style="text-align:right">Thriving</b><b style="text-align:right">Perished</b><b style="text-align:right">Deaths/yr</b><b style="text-align:right">Score</b>
       ${row("Novice", S.novice)}${row("+ knowledge", S.knowledgeOnly)}${row("+ trained decisions", S.trained)}</div>`;
     drawCurve($("pre-curve"), m.curve, [["best", "#b58cf0", "best"], ["mean", "#62b879", "average"]]);
@@ -983,14 +987,15 @@ function startTraining(kind) {
     const G = 3, POP = 8;
     myCurve = [];
     $("my-curve").hidden = false;
-    trainLog(`Evolving decisions for ${G} generations × ${POP} candidates (each plays 5 years), starting from: ${base.label}…`);
+    trainLog(`Evolving decisions for ${G} generations × ${POP} candidates, each compared with the starting colony on the same 5 years. Starting from: ${base.label}…`);
     training = runChunked(T.trainBrain({ generations: G, pop: POP, elite: 3, perScenario: 1, seedBase: seed, knowledge: base.knowledge, start: base.brain, sampleSeed: seed }), (s) => {
       if (s.phase === "candidate") $("train-progress").style.width = `${(((s.generation - 1) * POP + s.done) / (G * POP)) * 100}%`;
       else {
         myCurve.push({ best: s.bestFitness, mean: s.meanFitness });
         drawCurve($("my-curve"), myCurve, [["best", "#b58cf0", "best"], ["mean", "#62b879", "average"]]);
         result = { ...result, brain: s.brain, gens: (base.gens || 0) + s.generation };
-        trainLog(`Generation ${s.generation}: best ${s.bestFitness.toFixed(1)}, average ${s.meanFitness.toFixed(1)}`);
+        const sg = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+        trainLog(`Generation ${s.generation}: best ${sg(s.bestFitness)}, average ${sg(s.meanFitness)} points/year vs. the starting colony (5 games is noisy; treat small gains as luck)`);
       }
     }, finish);
   }
