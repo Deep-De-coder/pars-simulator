@@ -41,6 +41,7 @@
     crisisDamp: 0.65, fieldsMult: 0.9, woodStock: 6, scrapStock: 6, fireResponse: 1, repair: 1, boilBias: 1,
     coverPatch: 1, coverBrace: 1, // how much to follow the handbook's greenhouse advice
     coverGain: 1, // how much a greenhouse's expected extra food counts
+    waterCare: 0, // 0 = water only when parched (handbook); 1 = keep soil at the crop's need
   };
 
   const YEAR = 360;
@@ -532,6 +533,9 @@
         else short.push(c.kind);
       }
       this.power.produced = r1(power);
+      // keep a record of daily output: plan on the bad days, not the average
+      (this.powerLog = this.powerLog || []).push(power);
+      if (this.powerLog.length > 30) this.powerLog.shift();
       this.power.used = used;
       this.power.stored = Math.min(this.power.capacity, avail);
       this.power.shortfall = [...new Set(short)];
@@ -614,10 +618,11 @@
       const crop = t.crop, truth = CROPS[crop.type], b = this.beliefs.crops[crop.type];
       // a greenhouse that froze because its lights lost power teaches us to
       // keep spare power, not that the crop is tender
-      if (cause === "frost" && t.lights && !t.powered && this.learnPower) {
-        const m = this.beliefs.powerMargin || 0;
-        this.beliefs.powerMargin = Math.min(8, m + 2);
-        if (!m) this.note("learn", `A power cut let the greenhouse at (${t.x},${t.y}) freeze. From now on we keep spare power before lighting more plots.`);
+      if (cause === "frost" && t.lights && !t.powered && this.learnPower && this.day !== this.powerLessonDay) {
+        this.powerLessonDay = this.day; // one lesson per cut, however many plots froze
+        const p = this.beliefs.powerPct ?? 0.1;
+        this.beliefs.powerPct = Math.max(0.02, Math.round((p - 0.04) * 100) / 100);
+        if (p === 0.1) this.note("learn", `A power cut let the greenhouse at (${t.x},${t.y}) freeze. We'll plan lit plots on even worse days than before.`);
       }
       b.lost++;
       this.stats.cropsLost++;
@@ -729,8 +734,9 @@
       u.waterSource = waterNet < 0 ? clamp(0.45 + (-waterNet / pop) * 0.4, 0.45, 0.9) : 0;
       u.food = clamp((21 - foodDays) / 18, 0, 1);
       u.farming = clamp(1 - prodRate / pop, 0, 1) * (foodDays < 60 ? 1 : 0.5);
-      const margin = this.beliefs.powerMargin || 0;
-      u.power = powerNeed + margin > this.power.produced + 0.5 ? clamp(0.35 + (powerNeed + margin - this.power.produced) * 0.08, 0.35, 0.85) : (this.power.produced === 0 ? 0.2 : 0.05);
+      const margin = 0;
+      const firm = this.firmPower();
+      u.power = powerNeed + margin > firm + 0.5 ? clamp(0.35 + (powerNeed + margin - firm) * 0.08, 0.35, 0.85) : (this.power.produced === 0 ? 0.2 : 0.05);
       u.growth = this.sc.noRadio ? 0 : pop < 8 && foodDays > 20 && waterNet >= 0 ? 0.25 : 0.05;
       // player priority boosts one need
       const map = { water: ["water", "waterSource"], food: ["food", "farming"], warmth: ["warmth", "fuel"], power: ["power"], safety: ["safety"] };
@@ -814,18 +820,64 @@
     }
 
     // crop advisor: expected food from planting crop on tile t today (beliefs only)
-    cropAdvice(t) {
+    // Power left for one more lit plot after what's already committed: heat,
+    // the ice drill, lights over growing crops, the learned safety margin, and
+    // lit plantings already planned today.
+    // Power we plan on, from our own record of the last 30 days. The handbook
+    // plans on a typical day (the median); each greenhouse frozen by a power
+    // cut teaches us to plan on a worse day (a lower percentile).
+    firmPower(pct = this.planPct()) {
+      const L = this.powerLog || [];
+      if (L.length < 5) return this.power.produced;
+      const sorted = [...L].sort((a, b) => a - b);
+      return sorted[Math.floor((sorted.length - 1) * pct)];
+    }
+    // Would a power cut kill what we grow here? By our own beliefs: the
+    // coldest season under a bare greenhouse vs. the crops' frost limits.
+    lethalCut() {
+      const frost = Object.entries(this.seeds).filter(([, n]) => n > 0).map(([id]) => this.beliefs.crops[id].frostKill);
+      // lethal only if even our hardiest crop would die: otherwise we can
+      // grow that one under glass through a cut
+      return frost.length > 0 && this.sc.climate.mean - this.sc.climate.amp + 12 <= Math.min(...frost);
+    }
+    // plan on bad days where a cut is lethal (more so after we've been burnt),
+    // on a typical day where it only slows growth
+    planPct() { return this.lethalCut() ? Math.min(0.1, this.beliefs.powerPct ?? 0.1) : 0.5; }
+    litSpare(pct = 0.5) {
+      if (this._litSpareDay !== this.day) {
+        let committed = 0;
+        for (const t of this.tiles) {
+          const s = t.structure;
+          if (s && s.type === "shelter" && s.heater) committed += this.sc.climate.mean < 10 ? 2 : 0.5;
+          if (s && s.type === "ice_drill") committed += 2;
+          if (t.lights && t.crop) committed += 2;
+        }
+        this._litSpareDay = this.day;
+        this._litCommitted = committed;
+        this._litReserved = 0;
+      }
+      return this.firmPower(pct) + this.power.stored / 4 - this._litCommitted - this._litReserved;
+    }
+    cropAdvice(t, assumePower = false) {
       const out = [];
+      // grow lights only help if they'll have power: lit now, or spare power
+      // or battery to switch them on (a plan can assume the power is coming)
+      // the coldest this plot gets in the next two months without power
+      let coldRaw = Infinity;
+      for (let d = 0; d < 60; d += 5) coldRaw = Math.min(coldRaw, this.climateTemp(this.dayOfYear + d) + (t.greenhouse ? 12 : 0) - this.sc.climate.noise);
       for (const [id, n] of Object.entries(this.seeds)) {
         if (n <= 0) continue;
         const b = this.beliefs.crops[id];
+        // count on the lights only if they'll have power; if losing it would
+        // kill this crop, only if we'd have power even on a bad day
+        const lit = !!t.lights && (assumePower || (t.powered && t.crop) || this.litSpare(coldRaw <= b.frostKill ? this.planPct() : 0.5) >= 2);
         let growth = 0, risk = null, days = 0;
         const horizon = Math.min(b.days * 2, 200);
         for (let d = 0; d < horizon && growth < 1; d++) {
           const raw = this.climateTemp(this.dayOfYear + d) + (t.greenhouse ? 12 : 0);
-          const temp = t.lights ? Math.max(raw, 18) : raw;
+          const temp = lit ? Math.max(raw, 18) : raw;
           if (temp <= b.frostKill + 1) { risk = `frost around day ${d}`; break; }
-          const light = (t.lights ? 1 : clamp(this.sc.climate.sun * 1.3, 0.15, 1));
+          const light = (lit ? 1 : clamp(this.sc.climate.sun * 1.3, 0.15, 1));
           const canWater = this.inv.water > this.alive.length * 6 ? 0.55 : 0;
           const moist = t.irrigated ? 0.75 : Math.max(t.moist, this.sc.climate.rain * 1.4, canWater);
           const water = b.flood ? 1 : clamp(1 - Math.max(0, b.water - moist) * 1.6, 0, 1);
@@ -969,12 +1021,14 @@
       }
       // --- farming
       const foodValue = 0.4 + u.farming * 1.4 + u.food * 0.6;
+      const rainSoon = this.forecast.slice(0, 3).some((f) => f.rain >= 0.3);
       for (const t of this.tiles) {
         if (!t.field || this.reserved(t)) continue;
         if (t.crop && t.crop.ripe) add({ label: `Harvest ${CROPS[t.crop.type].name.toLowerCase()} (${t.x},${t.y})`, need: "food", value: 12 + CROPS[t.crop.type].yield * 0.4, why: "ripe", task: { kind: "harvest", x: t.x, y: t.y, work: 1 }, skill: "farming" });
         if (!t.crop && t.flood === 0) {
           const adv = this.cropAdvice(t);
           const best = adv[0];
+          if (best && best.expected >= 8 && t.lights && !(t.powered && t.crop)) this._litReserved = (this._litReserved || 0) + 2; // reserve power for this lit planting
           if (best && best.expected >= 8) add({ label: `Plant ${best.name.toLowerCase()} at (${t.x},${t.y})`, need: "food", value: best.expected * foodValue * 0.35, why: `best choice here: expect ~${best.expected} food in ${best.days} days`, task: { kind: "plant", crop: best.crop, x: t.x, y: t.y, work: 1 }, skill: "farming", advice: adv.slice(0, 4) });
           // Would a cover change that? Ask the same question for this plot
           // under a greenhouse (+12 °C), using our own crop beliefs.
@@ -982,7 +1036,7 @@
             // Look two steps ahead: a cover, and a cover with grow lights
             // (worth a bit less, since the lights will need power too).
             const have = best ? best.expected : 0;
-            const c1 = this.cropAdvice({ ...t, greenhouse: true })[0], c2 = this.cropAdvice({ ...t, greenhouse: true, lights: true })[0];
+            const c1 = this.cropAdvice({ ...t, greenhouse: true })[0], c2 = this.cropAdvice({ ...t, greenhouse: true, lights: true }, true)[0];
             const g1 = c1 ? c1.expected - have : 0, g2 = c2 ? (c2.expected - have) * 0.75 : 0;
             const gh = g2 > g1 ? c2 : c1, gain = Math.max(g1, g2);
             if (gain >= 10) buildOption("greenhouse", gain * foodValue * 0.35 * this.brain.coverGain, best && best.expected >= 8 ? `a cover would grow ${gh.name.toLowerCase()} here (~${gh.expected} food vs ~${best.expected})` : `too cold to grow anything uncovered now; under a cover ${gh.name.toLowerCase()} would give ~${gh.expected}`, t);
@@ -991,14 +1045,21 @@
         if (!t.crop && t.fert < 0.6 && this.inv.compost >= 2 && !this.sc.terrain.sterile || (!t.crop && t.fert < 0.7 && this.inv.compost >= 2 && this.sc.terrain.sterile)) {
           add({ label: `Spread compost on the field at (${t.x},${t.y})`, need: "food", value: 5 + (0.6 - t.fert) * 20 * foodValue, why: `soil fertility is ${Math.round(t.fert * 100)}%`, task: { kind: "fertilize", x: t.x, y: t.y, work: 1 }, skill: "farming" });
         }
-        if (t.crop && !t.irrigated && t.moist < 0.25 && CROPS[t.crop.type] && this.inv.water > A.pop * 2) {
-          add({ label: `Water crops at (${t.x},${t.y})`, need: "food", value: 4 + t.crop.growth * 6, why: "soil is drying out", task: { kind: "water_crop", x: t.x, y: t.y, work: 1 }, skill: "farming" });
+        // water to what the crop needs (by our beliefs), not just when it's parched
+        // How far above "parched" to keep the soil is a trained habit
+        // (waterCare): worth it where water is cheap and plots are few, not
+        // where it's hauled by hand; never when the forecast has rain.
+        const care = rainSoon ? 0 : Math.min(1, this.brain.waterCare);
+        const wantMoist = t.crop ? Math.max(0.25, 0.25 + (this.beliefs.crops[t.crop.type].water - 0.3) * care) : 0;
+        if (t.crop && !t.irrigated && t.moist < wantMoist && CROPS[t.crop.type] && this.inv.water > A.pop * 2) {
+          const slow = Math.min(1, (wantMoist - t.moist) * 1.6); // share of growth lost to dry soil
+          add({ label: `Water crops at (${t.x},${t.y})`, need: "food", value: 4 + t.crop.growth * 6 + slow * 10 * this.brain.waterCare, why: t.moist < 0.25 ? "soil is drying out" : `the ${this.beliefs.crops[t.crop.type].name.toLowerCase()} grows slower in soil this dry`, task: { kind: "water_crop", x: t.x, y: t.y, work: 1 }, skill: "farming" });
         }
         if (!t.irrigated && (this.sc.climate.rain < 0.2 || t.crop && t.moist < 0.3) && this.siteForIrrigation(t)) {
           buildOption("irrigation", 18 * foodValue * (this.sc.climate.rain < 0.2 ? 1.6 : 1), "a channel from the water saves watering by hand every few days", t);
         }
         if (t.greenhouse && !t.lights && (this.sc.climate.sun < 0.6 || this.sc.climate.mean + 12 < 10)) {
-          if (this.power.produced - A.powerNeed > 1.5 + (this.beliefs.powerMargin || 0)) buildOption("grow_lights", 25 * foodValue, "the greenhouse alone is too dark or too cold", t);
+          if (this.firmPower() - A.powerNeed > 1.5) buildOption("grow_lights", 25 * foodValue, "the greenhouse alone is too dark or too cold", t);
           else if (u.power < 0.6) u.power = 0.6; // we need more power before lights make sense
         }
       }
@@ -1030,7 +1091,7 @@
         const b = this.beliefs.tech;
         // While power is genuinely short, a weak source is still worth building:
         // value it by the shortage it helps cover, with efficiency as a tiebreak.
-        const unmet = A.powerNeed + (this.beliefs.powerMargin || 0) - this.power.produced;
+        const unmet = A.powerNeed + 0 - this.firmPower();
         const worth = (out) => (unmet > 1 ? Math.max(out, Math.min(unmet, 4)) + out * 0.15 : out);
         if (this.sc.terrain.river) buildOption("water_wheel", u.power * worth(6 * this.flowBelief()) * horizon * 0.25, "the river keeps flowing day and night");
         if (this.inv.panels > 0 || this.tiles.some((t) => t.type === "ruins" && t.salvage > 0)) buildOption("solar_array", u.power * worth(b.solar_array.output) * horizon * 0.25, `panels give ~${b.solar_array.output.toFixed(1)}/day here${unmet > 1 ? `; we're ${unmet.toFixed(0)} short` : ""}`);
@@ -1667,7 +1728,7 @@
       place.wells = this.beliefs.tech.well.byElev.map((b) => ({ ok: b.ok, fail: b.fail }));
       if (this.beliefs.tech.well.real) place.wellsReal = this.beliefs.tech.well.real.map((c) => ({ ...c }));
       place.power = { wind_turbine: this.beliefs.tech.wind_turbine.output, solar_array: this.beliefs.tech.solar_array.output };
-      if (this.beliefs.powerMargin) place.powerMargin = this.beliefs.powerMargin;
+      if (this.beliefs.powerPct !== undefined) place.powerPct = this.beliefs.powerPct;
       place.yields = Object.fromEntries(Object.entries(this.beliefs.yields).map(([k, b]) => [k, { m: b.m, n: Math.min(30, b.n), told: b.told }]));
 
       if (this.discoveries.silt) place.silt = true;
@@ -1694,7 +1755,7 @@
         if (place.wellsReal) { this.beliefs.tech.well.real = place.wellsReal.map((c) => ({ ...c })); this.generalizeWells(); this.wellsGeneralized = true; }
         if (place.power) { this.beliefs.tech.wind_turbine.output = place.power.wind_turbine; this.beliefs.tech.solar_array.output = place.power.solar_array; this.beliefs.tech.wind_turbine.samples = this.beliefs.tech.solar_array.samples = 25; }
         if (place.silt) this.discoveries.silt = true;
-        if (place.powerMargin) this.beliefs.powerMargin = place.powerMargin;
+        if (place.powerPct !== undefined) this.beliefs.powerPct = place.powerPct;
         if (place.yields) for (const [k, y] of Object.entries(place.yields)) if (this.beliefs.yields[k]) Object.assign(this.beliefs.yields[k], y, { seen: y.told ? 99 : 0 });
 
       }
