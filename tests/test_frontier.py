@@ -171,3 +171,48 @@ def test_training_runs_and_stays_in_bounds():
     """ % json.dumps(str(STATIC / "frontier-train.js")))
     assert res["gens"] == 2 and res["inRange"] and res["years"] == 3
     assert res["best"] >= 0  # advantage over the starting brain; the start itself scores 0
+
+
+def test_colony_beliefs_get_closer_to_the_truth():
+    # Knowledge accuracy (share of beliefs that match the true world) must
+    # rise within a year and keep rising across lives that carry knowledge.
+    res = run("""
+      const out = {};
+      for (const sc of ['river_flood', 'dry_country']) {
+        let start = 0, life1 = 0, life4 = 0;
+        for (let s = 0; s < 4; s++) {
+          let k = null;
+          for (let life = 0; life < 4; life++) {
+            const f = new F.Frontier({scenario: sc, seed: 700 + s * 11 + life, knowledge: k});
+            if (life === 0) start += f.knowledgeAccuracy().pct;
+            while (f.running) f.tick();
+            if (life === 0) life1 += f.knowledgeAccuracy().pct;
+            if (life === 3) life4 += f.knowledgeAccuracy().pct;
+            k = f.exportKnowledge(k);
+          }
+        }
+        out[sc] = {start: start / 4, life1: life1 / 4, life4: life4 / 4};
+      }
+      console.log(JSON.stringify(out));
+    """)
+    for sc, r in res.items():
+        assert r["life1"] > r["start"] + 0.05, (sc, r)
+        assert r["life4"] > r["life1"], (sc, r)
+
+
+def test_yield_book_learns_from_experience_and_wells_learn_a_rule():
+    res = run("""
+      const f = new F.Frontier({scenario: 'river_flood', seed: 3});
+      // the handbook says river fishing gives 3.5 a day; the truth averages 2
+      for (let i = 0; i < 40; i++) f.observeYield('fish_river', [0, 1, 2, 3, 4][i % 5]);
+      // wells: fail twice at height 2, succeed at height 0
+      const real = f.beliefs.tech.well.real = [0, 1, 2, 3, 4].map(() => ({ok: 0, fail: 0}));
+      real[0].ok = 2; real[2].fail = 3;
+      f.generalizeWells();
+      const w = f.beliefs.tech.well.byElev.map((b) => b.ok / (b.ok + b.fail));
+      console.log(JSON.stringify({fish: f.beliefs.yields.fish_river.m, w}));
+    """)
+    assert abs(res["fish"] - 2) < 0.4
+    w = res["w"]
+    assert w[0] > w[2] > w[4], w  # learned that higher ground is drier, including untested heights
+    assert w[4] < 0.5

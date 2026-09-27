@@ -23,6 +23,19 @@
 
   // The colony's decision weights. Hand-set defaults; frontier-train.js
   // evolves better ones by playing many simulated years.
+  // What the handbook claims a day of each gathering job brings (food per day,
+  // or chance per dig for salvage finds). Some are optimistic on purpose.
+  const HANDBOOK_YIELDS = {
+    forage_Spring: 3, forage_Summer: 3, forage_Autumn: 4.2, forage_Winter: 1.2,
+    fish_river: 3.5, fish_lake: 2.2, hunt: 3.2,
+    wire: 0.35, plastic: 0.3, tools: 0.2, panels: 0.12,
+  };
+  const YIELD_LABEL = {
+    forage_Spring: "Foraging in spring", forage_Summer: "Foraging in summer", forage_Autumn: "Foraging in autumn", forage_Winter: "Foraging in winter",
+    fish_river: "Fishing the river", fish_lake: "Fishing the pond", hunt: "Hunting", wire: "Finding wire in ruins", plastic: "Finding plastic in ruins",
+    tools: "Finding tools in ruins", panels: "Finding solar panels in ruins",
+  };
+
   const DEFAULT_BRAIN = {
     safety: 1, warmth: 1, fuel: 1, water: 1, waterSource: 1, food: 1, farming: 1, power: 1, growth: 1,
     crisisDamp: 0.65, fieldsMult: 0.9, woodStock: 6, scrapStock: 6, fireResponse: 1, repair: 1, boilBias: 1,
@@ -56,7 +69,8 @@
 
   // ================================================================ world
   class Frontier {
-    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null } = {}) {
+    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true } = {}) {
+      this.learnYields = learnYields;
       if (!(hazards in HAZARD_LEVELS)) throw new Error(`Unknown hazard level ${hazards}`);
       this.hazards = hazards;
       this.hazardMult = HAZARD_LEVELS[hazards];
@@ -89,6 +103,7 @@
       this.discoveries = {};
       this.initBeliefs();
       if (knowledge) this.applyKnowledge(knowledge);
+      this.startKnowledge = true;
       this.genMap();
       this.initWeather();
       this.survivors = [];
@@ -96,6 +111,7 @@
       this.mind = null;
       this.note("event", `Day 1. ${this.sc.blurb}`);
       this.note("think", `What we need here: ${this.sc.needs}`);
+      this.startAccuracy = Math.round(this.knowledgeAccuracy().pct * 1000) / 10;
     }
 
     // ------------------------------------------------------------ helpers
@@ -121,6 +137,8 @@
       for (const [id, c] of Object.entries(HANDBOOK_CROPS)) {
         this.beliefs.crops[id] = { ...c, yieldFactor: 1, planted: 0, harvested: 0, lost: 0, learned: [], coldDays: 0 };
       }
+      // yield book: running mean per job, starting from the handbook (n = pseudo-count)
+      this.beliefs.yields = Object.fromEntries(Object.entries(HANDBOOK_YIELDS).map(([k, v]) => [k, { m: v, n: k.length > 8 && !k.startsWith("fish") && !k.startsWith("forage") ? 6 : 3, told: false }]));
       this.beliefs.hazard = { fireAware: false, quakeWait: false, mixCrops: false, boilWater: false, ashFertile: false, learned: [] };
       this.beliefs.tech = {
         well: { byElev: [0, 1, 2, 3, 4].map(() => ({ ok: 4, fail: 1 })), learned: [] }, // prior ~0.8 everywhere
@@ -825,7 +843,7 @@
         for (const [res, amt] of Object.entries(missing)) {
           const g = this.gatherOption(res, amt);
           // materials inherit the priority of what they're for
-          if (g) add({ ...g, value: parentValue * 0.55 / Math.max(1, g.daysNeeded), why: `to get ${amt} ${res} for ${parentLabel}`, need: parentNeed || "materials" });
+          if (g) add({ ...g, value: parentValue * 0.55 / Math.max(1, g.daysNeeded), why: `to get ${amt} ${res} for ${parentLabel}${g.expectDays && g.expectDays !== g.daysNeeded ? ` (from experience: ~${g.expectDays} days of digging)` : ""}`, need: parentNeed || "materials" });
         }
       };
       const buildOption = (id, value, why, site = null) => {
@@ -890,20 +908,36 @@
       if (u.food > 0 && !this.sc.noWildFood) {
         const season = this.season;
         const wild = season === "Winter" ? 0.4 : season === "Autumn" ? 1.4 : 1;
+        // Learned yields choose between food jobs; how much the colony works on
+        // food at all stays driven by how urgent food is (u.food). Using learned
+        // yields for both made the colony give up on food when it learned the
+        // handbook was optimistic (tested: -6.6 points/year).
+        const hasFish = this.inv.tools > 0 && this.tiles.some((t) => this.isWater(t));
+        const hasLake = this.tiles.some((t) => t.type === "lake"), hasRiver = !!this.sc.terrain.river;
+        const foodYields = [this.yieldEst(`forage_${season}`, 3 * wild)];
+        if (hasFish && hasRiver) foodYields.push(this.yieldEst("fish_river", 3.5));
+        if (hasFish && hasLake) foodYields.push(this.yieldEst("fish_lake", 2.2));
+        if (this.sc.game && this.inv.tools > 0) foodYields.push(this.yieldEst("hunt", 3.2));
+        const bestYield = Math.max(0.1, ...foodYields);
+        const foodScale = (y) => 3.5 * y / bestYield; // the best food job gets full weight
         const spots = this.tiles.filter((t) => ["forest", "marsh", "grass", "sand"].includes(t.type) && !t.field && t.flood === 0 && !this.reserved(t));
         if (spots.length) {
           const t = spots.reduce((a, b) => (this.dist(b, this.home) < this.dist(a, this.home) ? b : a));
-          add({ label: `Forage wild food near (${t.x},${t.y})`, need: "food", value: u.food * 3 * wild, why: `${A.foodDays.toFixed(0)} days of food left`, task: { kind: "gather", res: "forage", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
+          const fy = this.yieldEst(`forage_${season}`, 3 * wild);
+          add({ label: `Forage wild food near (${t.x},${t.y})`, need: "food", value: u.food * foodScale(fy), why: `${A.foodDays.toFixed(0)} days of food left; expect ~${fy.toFixed(1)} a day`, task: { kind: "gather", res: "forage", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
         }
         const game = this.sc.game;
         if (game && this.inv.tools > 0) {
           const t = spots.length ? spots[spots.length - 1] : null;
-          if (t) add({ label: `${game.name} near (${t.x},${t.y})`, need: "food", value: u.food * 3.2, why: "small game lives in the scrub", task: { kind: "gather", res: "hunt", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
+          const hy = this.yieldEst("hunt", 3.2);
+          if (t) add({ label: `${game.name} near (${t.x},${t.y})`, need: "food", value: u.food * foodScale(hy), why: `small game lives in the scrub; expect ~${hy.toFixed(1)} a day`, task: { kind: "gather", res: "hunt", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
         }
         const fishing = this.tiles.filter((t) => this.isWater(t) && !this.reserved(t));
         if (fishing.length && this.inv.tools > 0) {
           const t = fishing.reduce((a, b) => (this.dist(b, this.home) < this.dist(a, this.home) ? b : a));
-          add({ label: `Fish at (${t.x},${t.y})`, need: "food", value: u.food * (t.type === "lake" ? 2.2 : 3.5), why: t.type === "lake" ? "the pond has a few fish" : "the river has fish", task: { kind: "gather", res: "fish", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
+          const fk = t.type === "lake" ? "fish_lake" : "fish_river";
+          const fy = this.yieldEst(fk, t.type === "lake" ? 2.2 : 3.5);
+          add({ label: `Fish at (${t.x},${t.y})`, need: "food", value: u.food * foodScale(fy), why: `${t.type === "lake" ? "the pond" : "the river"} has fish; expect ~${fy.toFixed(1)} a day`, task: { kind: "gather", res: "fish", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
         }
       }
       // --- farming
@@ -1054,19 +1088,117 @@
       }
     }
     flowBelief() { return this.riverLevel < 0 ? 0.3 : 1; }
+    // ---- learning from experience: the yield book
+    yieldEst(key, fallback) {
+      if (!this.learnYields) return fallback;
+      const b = this.beliefs.yields[key];
+      return b ? b.m : fallback;
+    }
+    observeYield(key, value) {
+      const b = this.beliefs.yields[key];
+      if (!b) return;
+      b.n++;
+      b.m += (value - b.m) / b.n;
+      b.seen = (b.seen || 0) + 1;
+      const hand = HANDBOOK_YIELDS[key];
+      if (this.learnYields && !b.told && b.seen >= 8 && Math.abs(b.m - hand) / hand > 0.3) {
+        b.told = true;
+        const msg = hand < 1
+          ? `${YIELD_LABEL[key]}: it happens in about ${Math.round(b.m * 100)}% of digs here, not ${Math.round(hand * 100)}% as the handbook says.`
+          : `${YIELD_LABEL[key]} here brings about ${b.m.toFixed(1)} food a day, not ${hand.toFixed(1)} as the handbook says.`;
+        this.beliefs.yieldLearned = this.beliefs.yieldLearned || [];
+        this.beliefs.yieldLearned.push(`Day ${this.day + 1}: ${msg}`);
+        this.note("learn", msg);
+      }
+    }
+    // Learn a rule, not just a table: water lies deeper under high ground, so
+    // fit "chance = base x ratio^height" to every well actually dug, and use
+    // it for heights we haven't tried (blended with what each height showed).
+    generalizeWells() {
+      const T = this.beliefs.tech.well;
+      const real = T.real;
+      if (!real) return;
+      const dug = real.reduce((a, r) => a + r.ok + r.fail, 0);
+      if (dug < 2) return;
+      let best = null;
+      for (let b = 0.05; b <= 0.99; b += 0.02) for (let r = 0.2; r <= 1.0001; r += 0.02) {
+        // log-likelihood of what we saw, with a gentle pull toward the handbook's "works anywhere"
+        let ll = -((b - 0.8) ** 2 + (r - 1) ** 2) * 2;
+        real.forEach((c, h) => { const p = Math.min(0.99, Math.max(0.01, b * r ** h)); ll += c.ok * Math.log(p) + c.fail * Math.log(1 - p); });
+        if (!best || ll > best.ll) best = { ll, b, r };
+      }
+      T.model = { base: best.b, ratio: best.r, dug };
+      const K = 3; // how much the fitted rule counts, in wells
+      T.byElev = real.map((c, h) => { const p = best.b * best.r ** h; return { ok: c.ok + K * p, fail: c.fail + K * (1 - p) }; });
+      if (dug >= 3 && best.r < 0.8 && !this.wellsGeneralized) {
+        this.wellsGeneralized = true;
+        this.note("learn", `Water lies deeper under high ground: each step uphill cuts a well's chance to about ${Math.round(best.r * 100)}% of the step below. Applying that to heights we haven't dug.`);
+      }
+    }
+    // ---- how much of what the colony believes is actually true?
+    trueWellChance(elev) {
+      return [0.95, 0.8, 0.5, 0.25, 0.1][elev] * (this.scenarioId === "dry_country" ? 0.55 : 1) * (this.sc.terrain.sterile ? 0 : 1);
+    }
+    knowledgeAccuracy() {
+      const facts = [];
+      const fact = (group, name, ok, belief, truth) => facts.push({ group, name, ok: !!ok, belief, truth });
+      // crops the colony has or has grown
+      for (const [id, b] of Object.entries(this.beliefs.crops)) {
+        if (!((this.seeds[id] || 0) > 0 || b.planted)) continue;
+        const t = CROPS[id];
+        fact("crops", `${t.name}: grows above`, Math.abs(b.minT - t.minT) <= 1, `${b.minT} °C`, `${t.minT} °C`);
+        fact("crops", `${t.name}: frost kills at`, Math.abs(b.frostKill - t.frostKill) <= 1.5, `${b.frostKill} °C`, `${t.frostKill} °C`);
+        fact("crops", `${t.name}: survives floods`, b.flood === t.flood, b.flood ? "yes" : "no", t.flood ? "yes" : "no");
+      }
+      // wells at the heights that exist here
+      if (!this.sc.terrain.sterile) {
+        const elevs = [...new Set(this.tiles.filter((t) => this.isLand(t)).map((t) => t.elev))].sort();
+        for (const e of elevs) {
+          const w = this.beliefs.tech.well.byElev[e], bel = w.ok / (w.ok + w.fail), tru = this.trueWellChance(e);
+          fact("wells", `Well at height ${e} strikes water`, Math.abs(bel - tru) <= 0.15, `${Math.round(bel * 100)}%`, `${Math.round(tru * 100)}%`);
+        }
+      }
+      // gathering yields that apply here
+      const Y = this.beliefs.yields;
+      const yf = (key, truth, tol) => fact("yields", YIELD_LABEL[key], Math.abs(Y[key].m - truth) <= tol, Y[key].m.toFixed(2), truth.toFixed(2));
+      if (!this.sc.noWildFood) {
+        // in the desert the nearest spot may be sand (half yield) or oasis grass
+        const lo = this.scenarioId === "dry_country" ? 0.5 : 1;
+        for (const [sea, base] of [["Spring", 2.5], ["Summer", 2.5], ["Autumn", 4], ["Winter", 1]]) {
+          const m = Y[`forage_${sea}`].m, tol = Math.max(0.5, base * 0.25);
+          fact("yields", YIELD_LABEL[`forage_${sea}`], m >= base * lo - tol && m <= base + tol, m.toFixed(2), lo < 1 ? `${(base * lo).toFixed(2)}–${base.toFixed(2)}` : base.toFixed(2));
+        }
+      }
+      if (this.sc.terrain.river) yf("fish_river", 2, 0.5);
+      if (this.tiles.some((t) => t.type === "lake")) yf("fish_lake", 1.2, 0.4);
+      if (this.sc.game) yf("hunt", (this.sc.game.yield[0] + this.sc.game.yield[1]) / 2, 0.5);
+      if (this.tiles.some((t) => t.type === "ruins") || this.stats.harvests >= 0) {
+        for (const [k, p] of [["wire", 0.35], ["plastic", 0.3], ["tools", 0.08], ["panels", 0.07]]) if (this.sc.terrain.ruins) yf(k, p, Math.max(0.04, p * 0.3));
+      }
+      // disaster lessons for disasters that can strike here
+      const LES = { boilWater: "outbreak", fireAware: "wildfire", quakeWait: "earthquake", mixCrops: "blight", ashFertile: "wildfire" };
+      const LNAME = { boilWater: "Unboiled water spreads fever", fireAware: "Firebreaks before dry season", quakeWait: "Wait out aftershocks", mixCrops: "Mix crops against blight", ashFertile: "Ash makes soil fertile" };
+      for (const [k, d] of Object.entries(LES)) if (d in this.sc.disasters && this.canHappen(d)) fact("lessons", LNAME[k], this.beliefs.hazard[k], this.beliefs.hazard[k] ? "known" : "not yet", "true");
+      if (this.sc.terrain.river) fact("lessons", "Flood silt is fertile", this.discoveries.silt, this.discoveries.silt ? "known" : "not yet", "true");
+      const ok = facts.filter((f) => f.ok).length;
+      return { pct: facts.length ? ok / facts.length : 1, ok, total: facts.length, facts };
+    }
     gatherOption(res, amt) {
       const T = this.tiles.filter((t) => !this.reserved(t) && t.flood === 0);
       const nearest = (f) => { const l = T.filter(f); return l.length ? l.reduce((a, b) => (this.dist(b, this.home) < this.dist(a, this.home) ? b : a)) : null; };
-      let t, rate, kind, label;
+      let t, rate, kind, label, learned = null;
       if (res === "wood") { t = nearest((x) => x.type === "forest" && x.wood > 0); rate = 4; kind = "wood"; label = "Chop wood"; }
       else if (res === "stone") { t = nearest((x) => (x.type === "rock" || x.type === "ice") && x.stone > 0); rate = 3; kind = "stone"; label = "Quarry stone"; }
       else if (["scrap", "wire", "plastic", "panels", "tools"].includes(res)) {
         t = nearest((x) => x.type === "ruins" && x.salvage > 0);
-        rate = res === "scrap" ? 3 : res === "wire" ? 0.35 : res === "plastic" ? 0.3 : res === "tools" ? 0.12 : 0.08;
+        // priority uses the handbook's effort so a rarer part doesn't make the
+        // thing it's for less important; the learned odds give the honest estimate
+        rate = res === "scrap" ? 3 : { wire: 0.35, plastic: 0.3, tools: 0.12, panels: 0.08 }[res];
+        learned = res === "scrap" ? 3 : Math.max(0.03, this.yieldEst(res, HANDBOOK_YIELDS[res]));
         kind = "salvage"; label = `Salvage ruins for ${res}`;
       } else return null;
       if (!t) return null;
-      return { label: `${label} at (${t.x},${t.y})`, daysNeeded: Math.max(1, Math.ceil(amt / rate)), task: { kind: "gather", res: kind, x: t.x, y: t.y, work: 1 }, skill: kind === "salvage" ? "scavenging" : "building", need: "materials" };
+      return { label: `${label} at (${t.x},${t.y})`, daysNeeded: Math.max(1, Math.ceil(amt / rate)), expectDays: learned ? Math.max(1, Math.ceil(amt / learned)) : null, task: { kind: "gather", res: kind, x: t.x, y: t.y, work: 1 }, skill: kind === "salvage" ? "scavenging" : "building", need: "materials" };
     }
 
     plan() {
@@ -1099,7 +1231,10 @@
         if (best.task.req) for (const [k, v] of Object.entries(best.task.req)) this.inv[k] -= v;
         s.task = { ...best.task, progress: 0, label: best.label, skill: best.skill };
         if (best.task.kind !== "gather") best.value = 0; // one person per site job
-        else best.value *= 0.7; // diminishing returns for piling onto the same gather job
+        // Crowding: wood, stone and ruins run out, so piling on has diminishing
+        // returns. Fish, wild food and game don't deplete in this world, so the
+        // best food job keeps nearly full value for each extra person.
+        else best.value *= ["forage", "fish", "hunt"].includes(best.task.res) ? 0.95 : 0.7;
         assignments.push({ name: s.name, label: best.label, why: best.why });
       }
       const needs = Object.entries(A.u).sort((a, b) => b[1] - a[1]);
@@ -1154,7 +1289,11 @@
         t.salvage -= 1;
         this.inv.scrap += Math.round(2 + skill * 1.5);
         const finds = [["wire", 0.35], ["plastic", 0.3], ["tools", 0.08], ["panels", 0.07]];
-        for (const [k, p] of finds) if (R.chance(p * skill)) { this.inv[k] += 1; if (k === "panels" || k === "tools") this.note("event", `${s.name} found ${k === "panels" ? "a working solar panel" : "a toolkit"} in the ruins.`); }
+        for (const [k, p] of finds) {
+          const got = R.chance(p * skill);
+          if (got) { this.inv[k] += 1; if (k === "panels" || k === "tools") this.note("event", `${s.name} found ${k === "panels" ? "a working solar panel" : "a toolkit"} in the ruins.`); }
+          this.observeYield(k, (got ? 1 : 0) / skill);
+        }
         if (R.chance(0.18)) {
           const n = R.randint(2, 5);
           this.inv.food += n; this.gainFood(n);
@@ -1178,9 +1317,10 @@
         const base = this.season === "Winter" ? 1 : this.season === "Autumn" ? 4 : 2.5;
         const n = Math.round(base * skill * (t.type === "sand" ? 0.5 : 1)); // desert plants are sparse
         this.inv.food += n; this.gainFood(n);
+        this.observeYield(`forage_${this.season}`, n / skill);
       }
-      if (res === "hunt") { const [lo, hi] = this.sc.game.yield; const n = Math.round(this.R.randint(lo, hi) * skill); this.inv.food += n; this.gainFood(n); }
-      if (res === "fish") { const n = Math.round(this.R.randint(0, 4) * skill * (t.type === "lake" ? 0.6 : 1)); this.inv.food += n; this.gainFood(n); }
+      if (res === "hunt") { const [lo, hi] = this.sc.game.yield; const n = Math.round(this.R.randint(lo, hi) * skill); this.inv.food += n; this.gainFood(n); this.observeYield("hunt", n / skill); }
+      if (res === "fish") { const n = Math.round(this.R.randint(0, 4) * skill * (t.type === "lake" ? 0.6 : 1)); this.inv.food += n; this.gainFood(n); this.observeYield(t.type === "lake" ? "fish_lake" : "fish_river", n / skill); }
     }
     finishTask(s, t, task) {
       const R = this.R;
@@ -1192,6 +1332,9 @@
           const ok = R.chance(truth);
           const b = this.beliefs.tech.well.byElev[t.elev];
           if (ok) b.ok++; else b.fail++;
+          const real = this.beliefs.tech.well.real || (this.beliefs.tech.well.real = [0, 1, 2, 3, 4].map(() => ({ ok: 0, fail: 0 })));
+          if (ok) real[t.elev].ok++; else real[t.elev].fail++;
+          this.generalizeWells(t.elev);
           t.structure = { type: "well", ok, hp: 100, built: this.day };
           this.note(ok ? "build" : "event", ok ? `${s.name} struck water with a well at (${t.x},${t.y}).` : `The well at (${t.x},${t.y}) came up dry.`);
           if (!ok) {
@@ -1382,6 +1525,10 @@
       }
       this.day++;
       this.dayOfYear++;
+      if (this.day % 5 === 0 || this.day === 1) {
+        this.accuracyLog = this.accuracyLog || [];
+        this.accuracyLog.push([this.day, Math.round(this.knowledgeAccuracy().pct * 1000) / 10]);
+      }
       if (!this.alive.length) { this.running = false; this.outcome = "PERISHED"; this.note("death", "No one is left."); }
       else if (this.day >= YEAR) {
         this.running = false;
@@ -1435,7 +1582,9 @@
       k.hazard.learned = [...new Set([...(k.hazard.learned || []), ...this.beliefs.hazard.learned.map((l) => l.replace(/^Day \d+: /, ""))])];
       const place = k.places[this.scenarioId] || {};
       place.wells = this.beliefs.tech.well.byElev.map((b) => ({ ok: b.ok, fail: b.fail }));
+      if (this.beliefs.tech.well.real) place.wellsReal = this.beliefs.tech.well.real.map((c) => ({ ...c }));
       place.power = { wind_turbine: this.beliefs.tech.wind_turbine.output, solar_array: this.beliefs.tech.solar_array.output };
+      place.yields = Object.fromEntries(Object.entries(this.beliefs.yields).map(([k, b]) => [k, { m: b.m, n: Math.min(30, b.n), told: b.told }]));
 
       if (this.discoveries.silt) place.silt = true;
       k.places[this.scenarioId] = place;
@@ -1458,8 +1607,10 @@
       const place = (k.places || {})[this.scenarioId];
       if (place) {
         if (place.wells) this.beliefs.tech.well.byElev = place.wells.map((w) => ({ ...w }));
+        if (place.wellsReal) { this.beliefs.tech.well.real = place.wellsReal.map((c) => ({ ...c })); this.generalizeWells(); this.wellsGeneralized = true; }
         if (place.power) { this.beliefs.tech.wind_turbine.output = place.power.wind_turbine; this.beliefs.tech.solar_array.output = place.power.solar_array; this.beliefs.tech.wind_turbine.samples = this.beliefs.tech.solar_array.samples = 25; }
         if (place.silt) this.discoveries.silt = true;
+        if (place.yields) for (const [k, y] of Object.entries(place.yields)) if (this.beliefs.yields[k]) Object.assign(this.beliefs.yields[k], y, { seen: y.told ? 99 : 0 });
 
       }
       if (k.sunflower) this.discoveries.sunflower = true;
@@ -1547,6 +1698,12 @@
       },
       discoveries: { ...f.discoveries },
       hazardBeliefs: { ...f.beliefs.hazard },
+      accuracy: (() => { const a = f.knowledgeAccuracy(); return { pct: a.pct, ok: a.ok, total: a.total, facts: a.facts }; })(),
+      accuracyLog: (f.accuracyLog || []).slice(),
+      startAccuracy: f.startAccuracy,
+      yieldBook: Object.fromEntries(Object.entries(f.beliefs.yields).map(([k, b]) => [k, { label: YIELD_LABEL[k], belief: Math.round(b.m * 100) / 100, handbook: HANDBOOK_YIELDS[k], seen: b.seen || 0 }])),
+      yieldLearned: f.beliefs.yieldLearned || [],
+      wellModel: f.beliefs.tech.well.model || null,
       hazardGuide: HAZARD_GUIDE,
       hazards: f.hazards,
       hazardLevels: Object.keys(HAZARD_LEVELS),
