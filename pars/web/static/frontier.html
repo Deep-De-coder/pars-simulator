@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PARS Frontier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --ground: #0f1412;
+    --panel: #161d1b;
+    --panel-2: #1d2724;
+    --line: #293632;
+    --ink: #dfe6e2;
+    --muted: #8a9c95;
+    --accent: #e3a33b;
+    --accent-ink: #1a1206;
+    --good: #62b879;
+    --warn: #e3a33b;
+    --bad: #e0574f;
+    --water: #5aa6e0;
+    --learn: #b58cf0;
+    --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+    --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--body); display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+  button, select, input { font: inherit; color: inherit; }
+  button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  select, input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); border-bottom: 1px solid var(--line); background: var(--panel); }
+  .brand { font-family: var(--display); font-weight: 700; letter-spacing: .08em; font-size: 18px; }
+  .brand small { font-weight: 500; color: var(--muted); letter-spacing: .04em; font-size: 12px; margin-left: 6px; }
+  .when { font-family: var(--display); font-size: 15px; }
+  .when b { color: var(--accent); }
+  .wx { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+  .chip.alert { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+  .fc { display: inline-flex; gap: 4px; }
+  .fc span { padding: 2px 6px; border-radius: 4px; background: var(--panel-2); font-size: 11px; }
+  .fc span.ev { background: color-mix(in srgb, var(--bad) 35%, var(--panel-2)); }
+  .transport { display: flex; gap: 6px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+
+  main { display: grid; grid-template-columns: 1fr 400px; min-height: 0; }
+  #stage { position: relative; min-height: 0; }
+  #scene { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  .bar-top { position: absolute; left: 12px; top: 12px; right: 12px; display: flex; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+  .bar-top > * { pointer-events: auto; }
+  .pill-group { display: flex; gap: 3px; flex-wrap: wrap; background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); border-radius: 6px; padding: 5px; align-items: center; }
+  .pill-group span { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 0 4px; }
+  .pill-group button { padding: 3px 8px; font-size: 12px; }
+  .toasts { position: absolute; right: 12px; bottom: 12px; display: grid; gap: 5px; max-width: min(320px, calc(100% - 24px)); }
+  .toast { background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--learn); border-left: 4px solid var(--learn); border-radius: 6px; padding: 6px 9px; font-size: 12px; animation: pop .35s ease-out; }
+  .toast.event { border-color: var(--line); border-left-color: var(--bad); }
+  .toast.death { border-color: var(--bad); border-left-color: var(--bad); }
+  .toast b { display: block; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--learn); }
+  .toast.event b, .toast.death b { color: var(--bad); }
+  @keyframes pop { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .legend { position: absolute; left: 12px; bottom: 12px; font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; display: grid; gap: 4px; max-width: 300px; }
+  .legend .ramp { height: 8px; border-radius: 2px; }
+  .banner { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+  .banner > div { pointer-events: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px 22px; max-width: min(560px, calc(100% - 32px)); display: grid; gap: 10px; }
+  .banner h2 { font-family: var(--display); margin: 0; letter-spacing: .06em; }
+
+  aside { border-left: 1px solid var(--line); background: var(--panel); display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button { flex: 1; border: 0; border-radius: 0; background: transparent; padding: 10px 6px; font-family: var(--display); letter-spacing: .08em; text-transform: uppercase; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 500; background: transparent; }
+  .panel { overflow-y: auto; min-height: 0; }
+  section { padding: 14px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+  h3 { margin: 0; font-family: var(--display); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  h3 em { font-style: normal; font-family: var(--body); letter-spacing: 0; text-transform: none; color: var(--ink); font-size: 12px; }
+  .needs { display: grid; gap: 6px; }
+  .need { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: center; }
+  .need .label { font-size: 13px; }
+  .need .label small { display: block; color: var(--muted); font-size: 11px; line-height: 1.3; }
+  .track { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 4px; transition: width .3s; }
+  .check { display: grid; gap: 4px; font-size: 13px; }
+  .check > div { display: grid; grid-template-columns: 18px 1fr; gap: 6px; }
+  .check small { display: block; color: var(--muted); font-size: 11px; }
+  .ok { color: var(--good); } .no { color: var(--bad); }
+  .stock { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .stock div { background: var(--panel-2); border-radius: 4px; padding: 4px 6px; }
+  .stock label { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .options { display: grid; gap: 4px; font-size: 12px; }
+  .opt { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 5px 8px; background: var(--panel-2); border-radius: 4px; border-left: 3px solid var(--line); }
+  .opt.chosen { border-left-color: var(--accent); }
+  .opt.blocked { opacity: .7; border-left-color: var(--bad); }
+  .opt small { display: block; color: var(--muted); }
+  .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; padding: 1px 5px; border-radius: 3px; background: var(--line); color: var(--ink); white-space: nowrap; align-self: start; }
+  .assign { font-size: 12px; display: grid; gap: 3px; }
+  .assign b { color: var(--ink); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .crop { display: grid; gap: 4px; padding: 8px 10px; background: var(--panel-2); border-radius: 4px; font-size: 12px; }
+  .crop .head { display: flex; justify-content: space-between; gap: 8px; }
+  .crop .head b { font-size: 13px; }
+  .crop .kv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .crop .kv span { color: var(--muted); }
+  .crop .kv b { font-family: var(--mono); font-weight: 500; }
+  .crop .kv b.fixed { color: var(--learn); }
+  .crop .rumor { color: var(--warn); }
+  .crop .learned { color: var(--learn); }
+  .tech { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 6px 8px; background: var(--panel-2); border-radius: 4px; font-size: 12px; }
+  .tech small { color: var(--muted); grid-column: 1 / -1; }
+  .log { font: 12px/1.5 var(--mono); display: grid; gap: 3px; }
+  .log div { color: var(--muted); }
+  .log .learn { color: var(--learn); }
+  .log .death { color: var(--bad); }
+  .log .order { color: var(--accent); }
+  .log .think { color: var(--ink); }
+  .advice { display: grid; gap: 3px; font-size: 12px; }
+  .advice div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 18px; width: min(560px, calc(100% - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  .scen { display: grid; gap: 8px; }
+  .scen label { display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+  .scen label:has(input:checked) { border-color: var(--accent); }
+  .scen small { color: var(--muted); display: block; }
+  .err { color: var(--bad); font-size: 12px; min-height: 1em; }
+  @media (max-width: 960px) {
+    body { overflow: auto; grid-template-rows: auto auto; }
+    main { grid-template-columns: 1fr; }
+    #stage { height: 70vh; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+    .panel { overflow: visible; }
+    .transport { margin-left: 0; }
+    .legend { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .toast { animation: none; } .fill { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">PARS<small>Frontier</small></div>
+  <div class="when"><span id="scenario-name">…</span> · Day <b id="day" class="num">1</b> <span class="muted" id="season"></span></div>
+  <div class="wx">
+    <span class="chip" id="wx-now">—</span>
+    <span class="chip" id="disaster" hidden></span>
+    <span class="fc" id="forecast" title="3-day forecast"></span>
+  </div>
+  <div class="transport">
+    <button id="play" title="Play / pause (Space)">▶ Play</button>
+    <button id="step" title="Next day (.)">+1 day</button>
+    <button id="step7">+7</button>
+    <select id="speed" aria-label="Speed">
+      <option value="900">Slow</option>
+      <option value="350" selected>Normal</option>
+      <option value="120">Fast</option>
+      <option value="30">Very fast</option>
+    </select>
+    <button id="newgame">New life…</button>
+  </div>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="scene" aria-label="3D view of the settlement"></canvas>
+    <div class="bar-top">
+      <div class="pill-group" role="group" aria-label="Map overlay">
+        <span>View</span>
+        <button data-overlay="normal" class="on">Land</button>
+        <button data-overlay="fert">Soil</button>
+        <button data-overlay="moist">Moisture</button>
+        <button data-overlay="hazard">Salt &amp; contamination</button>
+        <button data-overlay="elev">Height</button>
+      </div>
+      <div class="pill-group" role="group" aria-label="Colony priority">
+        <span>Priority</span>
+        <button data-priority="auto" class="on" title="Let the colony decide">Auto</button>
+        <button data-priority="safety">Safety</button>
+        <button data-priority="warmth">Warmth</button>
+        <button data-priority="water">Water</button>
+        <button data-priority="food">Food</button>
+        <button data-priority="power">Power</button>
+      </div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+    <div class="banner" id="banner" hidden><div>
+      <h2 id="banner-title"></h2>
+      <div id="banner-body" class="check"></div>
+      <div class="row"><button class="on" id="banner-new">Start a new life</button><button id="banner-close">Look around</button></div>
+    </div></div>
+  </div>
+  <aside>
+    <div class="tabs" role="tablist">
+      <button data-tab="mind" class="on" role="tab">Colony mind</button>
+      <button data-tab="book" role="tab">Handbook</button>
+      <button data-tab="place" role="tab">Selected</button>
+      <button data-tab="log" role="tab">Journal</button>
+    </div>
+    <div class="panel" id="tab-mind">
+      <section>
+        <h3>What we need <em id="pop"></em></h3>
+        <div class="needs" id="needs"></div>
+      </section>
+      <section>
+        <h3>Stores</h3>
+        <div class="stock" id="stock"></div>
+        <div class="muted" style="font-size:12px" id="seeds"></div>
+      </section>
+      <section>
+        <h3>Today's thinking <em id="mind-day"></em></h3>
+        <div class="muted" style="font-size:12px" id="mind-summary"></div>
+        <div class="options" id="options"></div>
+        <h3 style="margin-top:4px">Who does what</h3>
+        <div class="assign" id="assign"></div>
+      </section>
+      <section>
+        <h3>Self-sufficiency <em>goal for the year</em></h3>
+        <div class="check" id="checklist"></div>
+      </section>
+    </div>
+    <div class="panel" id="tab-book" hidden>
+      <section>
+        <h3>Rule of threes</h3>
+        <div class="check" id="threes"></div>
+      </section>
+      <section>
+        <h3>Discoveries</h3>
+        <div id="discoveries" class="check"></div>
+      </section>
+      <section>
+        <h3>Crops <em>handbook vs. what we've learned</em></h3>
+        <div id="crops" style="display:grid;gap:6px"></div>
+      </section>
+      <section>
+        <h3>Wells &amp; power <em>beliefs</em></h3>
+        <div id="beliefs" style="display:grid;gap:6px;font-size:12px"></div>
+      </section>
+      <section>
+        <h3>Techniques</h3>
+        <div id="techs" style="display:grid;gap:6px"></div>
+      </section>
+    </div>
+    <div class="panel" id="tab-place" hidden>
+      <section><div id="inspect" class="muted">Click a tile or a person in the 3D view.</div></section>
+      <section><h3>Your orders <em id="order-count"></em></h3><div id="orders" class="assign muted">None. The colony decides everything itself.</div></section>
+    </div>
+    <div class="panel" id="tab-log" hidden>
+      <section><div class="log" id="log"></div></section>
+    </div>
+  </aside>
+</main>
+
+<dialog id="newdlg">
+  <form id="newform" method="dialog" style="display:grid;gap:12px">
+    <h3>Where do you start a new life?</h3>
+    <div class="scen" id="scen-list"></div>
+    <div class="row">
+      <label class="muted" style="font-size:12px;display:grid;gap:4px;flex:1">Seed (blank = random)<input id="nd-seed" inputmode="numeric" placeholder="random"></label>
+    </div>
+    <div class="err" id="nd-err"></div>
+    <div class="row"><button class="on" value="ok" id="nd-go">Start</button><button value="cancel" formnovalidate>Cancel</button></div>
+  </form>
+</dialog>
+
+<script src="/vendor/three.min.js"></script>
+<script src="/frontier-data.js"></script>
+<script src="/frontier-engine.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const NEED_LABEL = { safety: "Safety", warmth: "Shelter", fuel: "Firewood", water: "Water now", waterSource: "Water source", food: "Food now", farming: "Growing food", power: "Power", growth: "Growth" };
+const NEED_COLOR = { safety: "#e0574f", warmth: "#e08a4f", fuel: "#c9844a", water: "#5aa6e0", waterSource: "#4a8fc9", food: "#62b879", farming: "#4f9a62", power: "#e3c23b", growth: "#b58cf0", materials: "#8a9c95" };
+const CROP_COLOR = { potato: 0xc9b27a, beans: 0x5fae4e, kale: 0x3f7f5a, wheat: 0xd8c05a, corn: 0xe0c940, rice: 0x9bc76a, squash: 0xe38a3b, amaranth: 0xb0425e, sweetpotato: 0xb5673a, sunflower: 0xf0c419, radish: 0xd65a7a };
+
+let game = null, state = null;
+let overlay = "normal", playing = false, timer = null, selected = null, bannerSeen = -1;
+let seenLog = 0;
+
+// ================================================================ 3D
+const canvas = $("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.shadowMap.enabled = false;
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x0f1412, 30, 70);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 300);
+const hemi = new THREE.HemisphereLight(0xdfeee8, 0x2a2014, 0.55);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2d8, 0.8);
+scene.add(sun);
+const world = new THREE.Group(); scene.add(world);
+const tileGroup = new THREE.Group(), decoGroup = new THREE.Group(), peopleGroup = new THREE.Group(), fxGroup = new THREE.Group();
+world.add(tileGroup, decoGroup, peopleGroup, fxGroup);
+const tileMeshes = new Map(), decoCache = new Map(), people = new Map(), markers = [];
+let W = 0, H = 0;
+const ELEV = 0.32;
+
+const orbit = { theta: 0.6, phi: 0.95, radius: 22, target: new THREE.Vector3() };
+function placeCamera() {
+  const { theta, phi, radius, target } = orbit;
+  camera.position.set(target.x + radius * Math.sin(phi) * Math.sin(theta), target.y + radius * Math.cos(phi), target.z + radius * Math.sin(phi) * Math.cos(theta));
+  camera.lookAt(target);
+}
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, moved: 0 }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.moved += Math.abs(dx) + Math.abs(dy); drag.x = e.clientX; drag.y = e.clientY;
+  orbit.theta -= dx * 0.007; orbit.phi = Math.min(1.45, Math.max(0.25, orbit.phi - dy * 0.005)); placeCamera();
+});
+canvas.addEventListener("pointerup", (e) => { if (drag && drag.moved < 6) pick(e); drag = null; });
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); orbit.radius = Math.min(60, Math.max(6, orbit.radius * (1 + Math.sign(e.deltaY) * 0.08))); placeCamera(); }, { passive: false });
+function resize() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(1, r.height); camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas.parentElement);
+
+const pos = (x, y) => new THREE.Vector3(x - (W - 1) / 2, 0, y - (H - 1) / 2);
+const topY = (t) => t.elev * ELEV + 0.15;
+const mat = (c, o = {}) => new THREE.MeshLambertMaterial({ color: c, ...o });
+const G = {
+  box: new THREE.BoxGeometry(1, 1, 1), cone: new THREE.ConeGeometry(0.5, 1, 7), cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 10),
+  sphere: new THREE.SphereGeometry(0.5, 14, 10), dome: new THREE.SphereGeometry(0.5, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+  torus: new THREE.TorusGeometry(0.28, 0.05, 6, 14), plane: new THREE.PlaneGeometry(1, 1),
+};
+
+function palette(sterile) {
+  return sterile ? {
+    grass: 0x9b4a2e, sand: 0xb4573a, rock: 0x6e3b2c, ice: 0xd9e6ec, ruins: 0x5a4a44, field: 0x5a3322, forest: 0x7a3a26, marsh: 0x8a4630, river: 0x3f6f96, lake: 0x3f6f96,
+  } : { grass: 0x5f8a3e, forest: 0x3e6a33, rock: 0x7c7f7a, sand: 0xc9b27a, marsh: 0x55704a, ruins: 0x5b5752, ice: 0xd9e6ec, field: 0x6b4a2e, river: 0x2f6f9c, lake: 0x2f6f9c };
+}
+let PAL = palette(false);
+
+function buildWorld(s) {
+  W = s.W; H = s.H;
+  PAL = palette(s.scenario.sterile);
+  tileGroup.clear(); decoGroup.clear(); peopleGroup.clear(); fxGroup.clear();
+  tileMeshes.clear(); decoCache.clear(); people.clear();
+  scene.background = new THREE.Color(s.scenario.sterile ? 0x1c0f0b : 0x0f1412);
+  scene.fog.color.copy(scene.background);
+  for (const t of s.tiles) {
+    const h = t.elev * ELEV + 0.3;
+    const m = new THREE.Mesh(G.box, mat(PAL[t.type] || 0x777777));
+    m.scale.set(0.98, h, 0.98);
+    const p = pos(t.x, t.y); m.position.set(p.x, h / 2 - 0.15, p.z);
+    m.userData = { kind: "tile", x: t.x, y: t.y };
+    tileGroup.add(m); tileMeshes.set(`${t.x},${t.y}`, m);
+  }
+  buildWeatherFx();
+  orbit.radius = Math.max(W, H) * 1.45 * (camera.aspect < 0.9 ? 1.5 : 1);
+  placeCamera();
+}
+
+// per-tile decorations, rebuilt only when the tile's look changes
+function tileSig(t) {
+  const c = t.crop ? `${t.crop.type}${Math.min(4, Math.floor(t.crop.growth * 5))}${t.crop.ripe ? "r" : ""}${t.crop.health < 0.5 ? "s" : ""}` : "";
+  const st = t.structure ? `${t.structure.type}${t.structure.ok === false ? "x" : ""}${t.structure.heater ? "h" : ""}${t.structure.panels || ""}` : "";
+  return [t.type, t.field, c, st, t.greenhouse, t.lights, t.raised, t.levee, t.irrigated, t.flood, t.type === "forest" ? Math.ceil(t.wood / 5) : ""].join("|");
+}
+function add(parent, geo, color, sx, sy, sz, x, y, z, o) {
+  const m = new THREE.Mesh(geo, mat(color, o)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); parent.add(m); return m;
+}
+function buildDeco(t) {
+  const g = new THREE.Group();
+  const p = pos(t.x, t.y); const y = topY(t);
+  g.position.set(p.x, y, p.z);
+  const R = (i) => { const v = Math.sin((t.x * 73 + t.y * 37 + i * 11) * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  if (t.type === "forest") {
+    const n = Math.max(1, Math.ceil(t.wood / 5));
+    for (let i = 0; i < n + 1; i++) {
+      const tx = (R(i) - 0.5) * 0.6, tz = (R(i + 5) - 0.5) * 0.6, h = 0.5 + R(i + 9) * 0.4;
+      add(g, G.cyl, 0x5a3d22, 0.06, 0.2, 0.06, tx, 0.1, tz);
+      add(g, G.cone, PAL.forest === 0x7a3a26 ? 0x8a4a2a : 0x2f5a2a, 0.35, h, 0.35, tx, 0.2 + h / 2, tz);
+    }
+  }
+  if (t.type === "rock") for (let i = 0; i < 3; i++) add(g, G.sphere, 0x8a8c86, 0.25 + R(i) * 0.2, 0.18 + R(i + 3) * 0.15, 0.25, (R(i + 1) - 0.5) * 0.6, 0.08, (R(i + 2) - 0.5) * 0.6);
+  if (t.type === "ruins") for (let i = 0; i < 3; i++) add(g, G.box, 0x6b6660, 0.2 + R(i) * 0.25, 0.2 + R(i + 4) * 0.5, 0.2 + R(i + 2) * 0.2, (R(i + 1) - 0.5) * 0.6, 0.15, (R(i + 3) - 0.5) * 0.6).rotation.y = R(i) * 3;
+  if (t.type === "ice") for (let i = 0; i < 2; i++) add(g, G.box, 0xeaf4fa, 0.3, 0.12, 0.25, (R(i) - 0.5) * 0.5, 0.06, (R(i + 1) - 0.5) * 0.5, { transparent: true, opacity: 0.85 });
+  if (t.field) {
+    for (let r = -1; r <= 1; r++) add(g, G.box, 0x4a3320, 0.85, 0.04, 0.12, 0, 0.02, r * 0.28);
+    if (t.crop) {
+      const stage = Math.min(1, t.crop.growth);
+      const col = t.crop.health < 0.5 ? 0x8a6a3a : t.crop.ripe ? 0xe8c547 : CROP_COLOR[t.crop.type] || 0x5faa4e;
+      const size = 0.08 + stage * 0.22;
+      for (let r = -1; r <= 1; r++) for (let c = -1; c <= 1; c++) {
+        add(g, t.crop.type === "corn" || t.crop.type === "wheat" || t.crop.type === "sunflower" ? G.cone : G.sphere, col, size, size * (t.crop.type === "corn" || t.crop.type === "sunflower" ? 2.2 : 1), size, c * 0.28, 0.04 + size / 2, r * 0.28);
+      }
+    }
+  }
+  if (t.raised) for (const [dx, dz, sx, sz] of [[0, 0.46, 0.96, 0.06], [0, -0.46, 0.96, 0.06], [0.46, 0, 0.06, 0.96], [-0.46, 0, 0.06, 0.96]]) add(g, G.box, 0x8a5a2e, sx, 0.14, sz, dx, 0.07, dz);
+  if (t.levee) for (const [dx, dz, sx, sz] of [[0, 0.47, 1, 0.08], [0, -0.47, 1, 0.08], [0.47, 0, 0.08, 1], [-0.47, 0, 0.08, 1]]) add(g, G.box, 0xa89a7a, sx, 0.22, sz, dx, 0.11, dz);
+  if (t.irrigated) add(g, G.box, 0x4a9ad0, 0.08, 0.03, 0.96, 0.42, 0.03, 0);
+  if (t.greenhouse) {
+    add(g, G.box, 0xcfe8f0, 0.94, 0.55, 0.94, 0, 0.28, 0, { transparent: true, opacity: 0.28, depthWrite: false });
+    if (t.lights) {
+      add(g, G.box, 0xc07af0, 0.8, 0.03, 0.8, 0, 0.54, 0, { emissive: 0x9a4ae0, emissiveIntensity: 0.8 });
+    }
+  }
+  if (t.flood > 0) {
+    const w = add(g, G.box, 0x3b7fb0, 1.0, t.flood * ELEV + 0.06, 1.0, 0, (t.flood * ELEV) / 2, 0, { transparent: true, opacity: 0.6, depthWrite: false });
+    w.name = "floodwater";
+  }
+  const s = t.structure;
+  if (s) {
+    const ty = s.type;
+    if (ty === "shelter" && s.hab) { add(g, G.dome, 0xe8e2d8, 0.9, 0.7, 0.9, 0, 0, 0); add(g, G.cyl, 0x9a9a9a, 0.25, 0.3, 0.25, 0.45, 0.15, 0).rotation.z = Math.PI / 2; }
+    else if (ty === "shelter") { add(g, G.box, 0x8a6a48, 0.7, 0.4, 0.6, 0, 0.2, 0); const roof = add(g, G.cone, 0x5a3f2a, 0.62, 0.35, 0.62, 0, 0.57, 0); roof.rotation.y = Math.PI / 4; roof.geometry = new THREE.ConeGeometry(0.72, 1, 4); }
+    if (ty === "shelter" && s.heater) add(g, G.box, 0xff7a3b, 0.12, 0.12, 0.05, 0, 0.2, 0.31, { emissive: 0xff5a1b, emissiveIntensity: 0.9 });
+    if (ty === "well") { add(g, G.cyl, s.ok === false ? 0x6a6a6a : 0x9a9488, 0.4, 0.22, 0.4, 0, 0.11, 0); add(g, G.cyl, s.ok === false ? 0x3a2a1a : 0x3a78b0, 0.3, 0.02, 0.3, 0, 0.23, 0); if (s.ok === false) { add(g, G.box, 0xe0574f, 0.5, 0.04, 0.06, 0, 0.35, 0).rotation.y = 0.8; add(g, G.box, 0xe0574f, 0.5, 0.04, 0.06, 0, 0.35, 0).rotation.y = -0.8; } }
+    if (ty === "rain_catcher") { add(g, G.cyl, 0x3a6a9a, 0.3, 0.35, 0.3, 0, 0.18, 0); const tarp = add(g, G.box, 0x4f8fc0, 0.7, 0.02, 0.7, 0, 0.45, 0); tarp.rotation.x = 0.3; }
+    if (ty === "solar_still") add(g, G.cone, 0xcfe8f0, 0.5, 0.3, 0.5, 0, 0.15, 0, { transparent: true, opacity: 0.6 });
+    if (ty === "ice_drill") { add(g, G.cyl, 0x9aa0a6, 0.12, 0.9, 0.12, 0, 0.45, 0); add(g, G.box, 0x6a7078, 0.4, 0.2, 0.4, 0, 0.1, 0); }
+    if (ty === "water_wheel") { const wheel = add(g, G.torus, 0x8a6a48, 1.3, 1.3, 1.3, 0.3, 0.35, 0); wheel.rotation.y = Math.PI / 2; wheel.name = "spin"; wheel.userData.axis = "x"; add(g, G.box, 0x6a5a48, 0.3, 0.3, 0.3, -0.1, 0.15, 0); }
+    if (ty === "wind_turbine") {
+      add(g, G.cyl, 0xb0b4b8, 0.05, 1.3, 0.05, 0, 0.65, 0);
+      const hub = new THREE.Group(); hub.position.set(0, 1.3, 0.05); hub.name = "spin"; hub.userData.axis = "z";
+      for (let i = 0; i < 3; i++) { const b = add(hub, G.box, 0xe8e8e8, 0.06, 0.55, 0.02, 0, 0.28, 0); const piv = new THREE.Group(); piv.rotation.z = (i * Math.PI * 2) / 3; piv.add(b); hub.add(piv); }
+      g.add(hub);
+    }
+    if (ty === "solar_array") { const n = s.panels || 1; for (let i = 0; i < Math.min(4, n); i++) { const pnl = add(g, G.box, 0x1f3a6a, 0.4, 0.02, 0.32, (i % 2 - 0.5) * 0.44, 0.2, (Math.floor(i / 2) - 0.5) * 0.4 * (n > 2 ? 1 : 0)); pnl.rotation.x = -0.5; } }
+    if (ty === "biogas") { add(g, G.cyl, 0x4a6a4a, 0.45, 0.4, 0.45, 0, 0.2, 0); add(g, G.cyl, 0x7a7a7a, 0.05, 0.3, 0.05, 0.15, 0.5, 0); }
+    if (ty === "radio") { add(g, G.cyl, 0x9a9a9a, 0.04, 1.6, 0.04, 0, 0.8, 0); const blink = add(g, G.sphere, 0xff4040, 0.1, 0.1, 0.1, 0, 1.62, 0, { emissive: 0xff2020 }); blink.name = "blink"; }
+  }
+  return g;
+}
+function syncDeco(s) {
+  for (const t of s.tiles) {
+    const key = `${t.x},${t.y}`, sig = tileSig(t);
+    const cached = decoCache.get(key);
+    if (cached && cached.sig === sig) continue;
+    if (cached) decoGroup.remove(cached.g);
+    const g = buildDeco(t);
+    decoGroup.add(g); decoCache.set(key, { sig, g });
+  }
+}
+
+// overlays
+function lerpColor(a, b, t) { return new THREE.Color(a).lerp(new THREE.Color(b), Math.max(0, Math.min(1, t))); }
+function tileColor(t, s) {
+  if (overlay === "fert") return lerpColor(0x4a3a2a, 0x3fa04a, t.fert);
+  if (overlay === "moist") return lerpColor(0xc9a86a, 0x2f7fc4, t.moist);
+  if (overlay === "hazard") return t.contam > 0.05 || t.salt > 0.05 ? lerpColor(0x3a4a3a, t.contam > t.salt ? 0xd0e040 : 0xf0f0f0, Math.max(t.contam, t.salt)) : new THREE.Color(0x2f3a33);
+  if (overlay === "elev") return lerpColor(0x2a4a6a, 0xd8d0b0, t.elev / 4);
+  let c = new THREE.Color(PAL[t.type] || 0x777777);
+  if (t.type === "field") c = lerpColor(0x5a4030, 0x7a5a38, t.fert);
+  if (s.weather.temp < 0 && !["river", "lake"].includes(t.type) && !t.greenhouse && !s.scenario.sterile) c.lerp(new THREE.Color(0xe8eef2), Math.min(0.6, -s.weather.temp / 15));
+  if (t.silt && t.flood === 0 && t.type !== "field") c.lerp(new THREE.Color(0x7a6a4a), 0.25);
+  return c;
+}
+const LEGENDS = {
+  normal: () => `<b style="color:var(--ink)">Land</b><div>Survivors stand on the tile they're working. Amber rings mark today's jobs. Greenhouses glow purple under grow lights.</div>`,
+  fert: () => `<b style="color:var(--ink)">Soil fertility</b><div class="ramp" style="background:linear-gradient(90deg,#4a3a2a,#3fa04a)"></div><div>poor → rich. Flood silt and compost raise it; hungry crops lower it.</div>`,
+  moist: () => `<b style="color:var(--ink)">Soil moisture</b><div class="ramp" style="background:linear-gradient(90deg,#c9a86a,#2f7fc4)"></div><div>dry → wet. Crops stall in dry soil unless watered or irrigated.</div>`,
+  hazard: () => `<b style="color:var(--ink)">Salt &amp; contamination</b><div><span style="color:#f0f0f0">■</span> salt (rain washes it out) · <span style="color:#d0e040">■</span> contamination (sunflowers clean it)</div>`,
+  elev: () => `<b style="color:var(--ink)">Height</b><div class="ramp" style="background:linear-gradient(90deg,#2a4a6a,#d8d0b0)"></div><div>low → high. Low ground floods but wells strike water there.</div>`,
+};
+
+// people
+function syncPeople(s) {
+  const seen = new Set();
+  const byTile = new Map();
+  for (const p of s.survivors) { const k = `${p.x},${p.y}`; if (!byTile.has(k)) byTile.set(k, []); byTile.get(k).push(p); }
+  for (const [, group] of byTile) group.forEach((p, i) => {
+    seen.add(p.id);
+    let m = people.get(p.id);
+    if (!m) {
+      m = new THREE.Group();
+      const body = add(m, G.cyl, 0xffffff, 0.16, 0.34, 0.16, 0, 0.17, 0); body.name = "body";
+      add(m, G.sphere, 0xe8c9a8, 0.16, 0.16, 0.16, 0, 0.42, 0);
+      const halo = new THREE.Mesh(new THREE.RingGeometry(0.2, 0.26, 20), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+      halo.rotation.x = -Math.PI / 2; halo.position.y = 0.02; halo.name = "halo"; m.add(halo);
+      m.traverse((o) => { o.userData = { kind: "person", id: p.id }; });
+      peopleGroup.add(m); people.set(p.id, m);
+      const t0 = s.tiles[p.y * s.W + p.x]; const q = pos(p.x, p.y); m.position.set(q.x, topY(t0), q.z);
+    }
+    const t = s.tiles[p.y * s.W + p.x];
+    const q = pos(p.x, p.y), n = group.length, a = (i / n) * Math.PI * 2, off = n > 1 ? 0.25 : 0;
+    m.userData.goal = new THREE.Vector3(q.x + Math.cos(a) * off, topY(t) + (t.structure ? 0.02 : 0), q.z + Math.sin(a) * off);
+    m.getObjectByName("body").material.color.set(p.health > 60 ? 0x62b879 : p.health > 30 ? 0xe3a33b : 0xe0574f);
+    m.getObjectByName("halo").visible = !!(selected && selected.kind === "person" && selected.id === p.id);
+  });
+  for (const [id, m] of people) if (!seen.has(id)) { peopleGroup.remove(m); people.delete(id); }
+}
+function syncMarkers(s) {
+  markers.forEach((m) => fxGroup.remove(m)); markers.length = 0;
+  const ringGeo = new THREE.RingGeometry(0.36, 0.44, 24);
+  for (const a of (s.mind && s.mind.assignments) || []) {
+    const mt = /\((\d+),(\d+)\)/.exec(a.label);
+    if (!mt) continue;
+    const t = s.tiles[+mt[2] * s.W + +mt[1]];
+    const r = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xe3a33b, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
+    r.rotation.x = -Math.PI / 2; const q = pos(t.x, t.y); r.position.set(q.x, topY(t) + 0.03, q.z);
+    fxGroup.add(r); markers.push(r);
+  }
+  if (selected && selected.kind === "tile") {
+    const t = s.tiles[selected.y * s.W + selected.x];
+    const r = new THREE.Mesh(new THREE.RingGeometry(0.46, 0.52, 4, 1), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+    r.rotation.x = -Math.PI / 2; r.rotation.z = Math.PI / 4; const q = pos(t.x, t.y); r.position.set(q.x, topY(t) + 0.04, q.z);
+    fxGroup.add(r); markers.push(r);
+  }
+}
+
+// weather particles
+const NP = 1400;
+let pGeo, pMat, particles, pPos, pVel;
+function buildWeatherFx() {
+  pGeo = new THREE.BufferGeometry(); pPos = new Float32Array(NP * 3); pVel = new Float32Array(NP);
+  for (let i = 0; i < NP; i++) resetP(i, true);
+  pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
+  pMat = new THREE.PointsMaterial({ size: 0.06, transparent: true, opacity: 0.8, depthWrite: false, color: 0x9ac8f0 });
+  particles = new THREE.Points(pGeo, pMat); particles.visible = false; fxGroup.add(particles);
+}
+function resetP(i, init) {
+  pPos[i * 3] = (Math.random() - 0.5) * (W + 2); pPos[i * 3 + 1] = init ? Math.random() * 8 : 8 + Math.random(); pPos[i * 3 + 2] = (Math.random() - 0.5) * (H + 2);
+  pVel[i] = 0.7 + Math.random() * 0.6;
+}
+let fx = { kind: null, count: 0, speed: 0, drift: 0 };
+function setWeatherFx(s) {
+  const w = s.weather, dz = s.disaster && s.disaster.type;
+  fx = { kind: null, count: 0, speed: 0.12, drift: 0 };
+  if (dz === "ashfall") fx = { kind: "ash", count: 900, speed: 0.012, drift: 0.01, color: 0x8a8a86, size: 0.09 };
+  else if (s.scenario.sterile && dz === "storm") fx = { kind: "dust", count: 1400, speed: 0.02, drift: 0.12, color: 0xc0603a, size: 0.08 };
+  else if (w.rain > 0 && w.temp <= 0) fx = { kind: "snow", count: Math.round(400 + w.rain * 800), speed: 0.03, drift: 0.015, color: 0xffffff, size: 0.09 };
+  else if (w.rain > 0) fx = { kind: "rain", count: Math.round(300 + w.rain * 1000) + (dz === "storm" ? 400 : 0), speed: dz === "storm" ? 0.35 : 0.22, drift: dz === "storm" ? 0.08 : 0.01, color: 0x9ac8f0, size: 0.05 };
+  particles.visible = !!fx.kind;
+  if (fx.kind) { pMat.color.set(fx.color); pMat.size = fx.size; pGeo.setDrawRange(0, Math.min(NP, fx.count)); }
+  // light and sky
+  const sunK = w.sun;
+  sun.intensity = 0.25 + 0.75 * sunK;
+  sun.color.set(dz === "heatwave" ? 0xffc890 : dz === "ashfall" ? 0xb8b0a0 : s.scenario.sterile ? 0xffd8c0 : 0xfff2d8);
+  const doy = s.dayOfYear % 360;
+  const ang = (doy / 360) * Math.PI * 2;
+  sun.position.set(Math.cos(ang) * 20, 12 + 8 * Math.sin(ang), 10);
+  const base = s.scenario.sterile ? new THREE.Color(0x2a140e) : new THREE.Color(0x14201c);
+  if (dz === "storm" || w.rain > 0) base.lerp(new THREE.Color(0x0a0e10), 0.4);
+  if (dz === "heatwave") base.lerp(new THREE.Color(0x3a2210), 0.4);
+  if (w.temp < 0 && !s.scenario.sterile) base.lerp(new THREE.Color(0x24303a), 0.4);
+  scene.background = base; scene.fog.color.copy(base);
+  // river tiles: water color
+  for (const t of s.tiles) if (t.type === "river" || t.type === "lake") tileMeshes.get(`${t.x},${t.y}`).material.color.set(s.riverLevel < 0 && t.type === "river" ? 0x5a7a8a : 0x2f6f9c);
+}
+let last = 0;
+function animate(t) {
+  requestAnimationFrame(animate);
+  const dt = Math.min(0.1, (t - last) / 1000); last = t;
+  if (fx.kind) {
+    const n = Math.min(NP, fx.count);
+    for (let i = 0; i < n; i++) {
+      pPos[i * 3 + 1] -= fx.speed * pVel[i] * (dt * 60);
+      pPos[i * 3] += (fx.drift + Math.sin(t * 0.001 + i) * fx.drift * 0.5) * (dt * 60);
+      if (pPos[i * 3 + 1] < 0) resetP(i);
+      if (pPos[i * 3] > W / 2 + 1) pPos[i * 3] -= W + 2;
+    }
+    pGeo.attributes.position.needsUpdate = true;
+  }
+  const wind = state ? state.weather.wind : 0.3, flow = state ? Math.max(0.2, 1 + (state.riverLevel || 0) * 0.4) : 1;
+  decoGroup.traverse((o) => {
+    if (o.name === "spin") { if (o.userData.axis === "z") o.rotation.z += dt * (1 + wind * 7); else o.rotation.x += dt * 1.6 * flow; }
+    if (o.name === "blink") o.visible = Math.floor(t / 600) % 2 === 0;
+  });
+  for (const m of people.values()) if (m.userData.goal) m.position.lerp(m.userData.goal, 1 - Math.pow(0.02, dt));
+  const shimmer = 0.55 + Math.sin(t * 0.003) * 0.08;
+  decoGroup.traverse((o) => { if (o.name === "floodwater") o.material.opacity = shimmer; });
+  renderer.render(scene, camera);
+}
+
+// picking
+const raycaster = new THREE.Raycaster();
+function pick(e) {
+  const r = canvas.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hits = raycaster.intersectObjects([...peopleGroup.children, ...tileGroup.children, ...decoGroup.children], true);
+  let hit = hits.find((h) => h.object.userData && h.object.userData.kind);
+  if (!hit) {
+    // decorations: map back to their tile
+    const dh = hits.find((h) => { let o = h.object; while (o && o.parent !== decoGroup) o = o.parent; return !!o; });
+    if (dh) { let o = dh.object; while (o.parent !== decoGroup) o = o.parent; const x = Math.round(o.position.x + (W - 1) / 2), y = Math.round(o.position.z + (H - 1) / 2); selected = { kind: "tile", x, y }; }
+    else selected = null;
+  } else selected = { ...hit.object.userData };
+  showTab("place");
+  render();
+}
+
+// ================================================================ panels
+function bar(v, color) { return `<div class="track"><div class="fill" style="width:${Math.round(Math.max(0, Math.min(1, v)) * 100)}%;background:${color}"></div></div>`; }
+function render() {
+  const s = state; if (!s) return;
+  $("scenario-name").textContent = s.scenario.name;
+  $("day").textContent = s.day + 1;
+  $("season").textContent = `${s.season}`;
+  const w = s.weather;
+  $("wx-now").textContent = `${w.temp.toFixed(0)} °C · ${w.rain > 0 ? (w.temp <= 0 ? "snow" : "rain") : w.sun > 0.7 ? "sunny" : "cloudy"} · wind ${Math.round(w.wind * 100)}%`;
+  const d = $("disaster");
+  d.hidden = !s.disaster;
+  if (s.disaster) { d.className = "chip alert"; d.textContent = `${s.disaster.name} · ${s.disaster.daysLeft}d`; }
+  $("forecast").innerHTML = s.forecast.map((f, i) => `<span class="${f.event ? "ev" : ""}" title="In ${i + 1} day(s)">+${i + 1}: ${f.temp.toFixed(0)}°${f.rain ? " rain" : ""}${f.event ? " · " + esc(f.event) : ""}</span>`).join("");
+  const pop = s.survivors.length;
+  $("pop").textContent = `${pop} people`;
+
+  // needs
+  const m = s.mind;
+  const needs = m ? m.needs.filter((n) => NEED_LABEL[n.need]) : [];
+  $("needs").innerHTML = needs.map((n) => `<div class="need"><div class="label">${NEED_LABEL[n.need]}</div>${bar(n.urgency, NEED_COLOR[n.need])}</div>`).join("");
+  const inv = s.inv;
+  const STOCK = [["food", "Food"], ["water", "Water"], ["wood", "Wood"], ["stone", "Stone"], ["scrap", "Scrap"], ["wire", "Wire"], ["plastic", "Plastic"], ["panels", "Panels"], ["compost", "Compost"], ["tools", "Tools"]];
+  $("stock").innerHTML = STOCK.map(([k, l]) => `<div><label>${l}</label><span class="num">${inv[k]}</span></div>`).join("") ;
+  $("seeds").textContent = "Seeds: " + (Object.entries(s.seeds).filter(([, n]) => n > 0).map(([k, n]) => `${s.beliefs.crops[k].name.toLowerCase()} ${n}`).join(", ") || "none") + ` · power ${s.power.produced}/day made, ${s.power.used} used${s.power.shortfall.length ? ", short for " + s.power.shortfall.join(", ") : ""}`;
+  if (m) {
+    $("mind-day").textContent = `day ${m.day}`;
+    $("mind-summary").innerHTML = Object.entries(m.summary).map(([k, v]) => `<div><b style="color:var(--ink)">${k[0].toUpperCase() + k.slice(1)}:</b> ${esc(v)}</div>`).join("");
+    const chosen = new Set(m.assignments.map((a) => a.label));
+    $("options").innerHTML = m.options.map((o) => `<div class="opt ${chosen.has(o.label) ? "chosen" : ""} ${o.blocked ? "blocked" : ""}">
+      <div>${esc(o.label)}<small>${esc(o.why || "")}${o.missing ? ` · missing ${Object.entries(o.missing).map(([k, v]) => `${v} ${k}`).join(", ")}` : ""}</small></div>
+      <span class="tag" style="background:${NEED_COLOR[o.need] || "var(--line)"};color:#111">${esc(o.need)} ${o.score}</span></div>`).join("");
+    $("assign").innerHTML = m.assignments.length ? m.assignments.map((a) => `<div><b>${esc(a.name)}</b>: ${esc(a.label)}${a.why ? ` <span class="muted">(${esc(a.why)})</span>` : ""}</div>`).join("") : `<div class="muted">Everyone is busy with jobs from earlier days.</div>`;
+  }
+  $("checklist").innerHTML = s.checklist.map((c) => `<div><span class="${c.ok ? "ok" : "no"}">${c.ok ? "✓" : "✗"}</span><div>${esc(c.label)}<small>${esc(c.detail)}</small></div></div>`).join("");
+
+  renderBook(s);
+  renderInspect(s);
+  renderLog(s);
+
+  // 3D
+  for (const t of s.tiles) tileMeshes.get(`${t.x},${t.y}`).material.color.copy(tileColor(t, s));
+  syncDeco(s); syncPeople(s); syncMarkers(s); setWeatherFx(s);
+  $("legend").innerHTML = LEGENDS[overlay]();
+  document.querySelectorAll("[data-priority]").forEach((b) => b.classList.toggle("on", b.dataset.priority === s.priority));
+
+  if (!s.running && bannerSeen !== s.day) {
+    const title = { THRIVING: "Thriving: a self-sufficient colony", SURVIVED: "Survived the year", PERISHED: "No one is left" }[s.outcome];
+    $("banner-title").textContent = title;
+    $("banner-title").style.color = s.outcome === "PERISHED" ? "var(--bad)" : s.outcome === "THRIVING" ? "var(--good)" : "var(--warn)";
+    $("banner-body").innerHTML = s.checklist.map((c) => `<div><span class="${c.ok ? "ok" : "no"}">${c.ok ? "✓" : "✗"}</span><div>${esc(c.label)}<small>${esc(c.detail)}</small></div></div>`).join("") +
+      `<div class="muted" style="grid-template-columns:1fr">Harvested ${s.stats.harvested} food in ${s.stats.harvests} harvests · ${s.stats.deaths} deaths · ${s.stats.joined} joined · learned ${s.log.filter((l) => l.kind === "learn").length} things</div>`;
+    $("banner").hidden = false; setPlaying(false);
+  } else if (s.running) $("banner").hidden = true;
+  ["play", "step", "step7"].forEach((id) => { $(id).disabled = !s.running; });
+}
+
+function renderBook(s) {
+  $("threes").innerHTML = s.ruleOfThrees.map((r) => `<div><span class="ok">•</span><div>${esc(r.label)}<small>${esc(r.rule)}</small></div></div>`).join("");
+  const disc = [
+    ["silt", "Flood silt makes old flood ground fertile. We plant there first."],
+    ["sunflower", "Sunflowers really do pull contamination out of the soil."],
+    ["wheel", "A water wheel gives steady power, and more when the river is high."],
+  ].filter(([k]) => s.discoveries[k]);
+  $("discoveries").innerHTML = disc.length ? disc.map(([, t]) => `<div><span style="color:var(--learn)">★</span><div>${esc(t)}</div></div>`).join("") : `<div class="muted" style="grid-template-columns:1fr">Nothing yet. The colony finds things out by trying them.</div>`;
+  const inHand = new Set(Object.entries(s.seeds).filter(([, n]) => n > 0).map(([k]) => k));
+  const crops = Object.entries(s.beliefs.crops).filter(([k, b]) => inHand.has(k) || b.planted || b.learned.length)
+    .sort((a, b) => (b[1].learned.length - a[1].learned.length) || (b[1].planted - a[1].planted));
+  $("crops").innerHTML = crops.map(([k, b]) => {
+    const f = (cur, hand) => `<b class="${cur !== hand ? "fixed" : ""}" title="${cur !== hand ? `handbook said ${hand}` : "as the handbook says"}">${cur}</b>`;
+    return `<div class="crop">
+      <div class="head"><b>${esc(b.name)}</b><span class="muted">${s.seeds[k] || 0} seeds · planted ${b.planted} · harvested ${b.harvested} · lost ${b.lost}</span></div>
+      <div class="kv"><div><span>Grows above</span><br>${f(b.minT + " °C", b.handbook.minT + " °C")}</div><div><span>Frost kills at</span><br>${f(b.frostKill + " °C", b.handbook.frostKill + " °C")}</div><div><span>Survives floods</span><br>${f(b.flood ? "yes" : "no", b.handbook.flood ? "yes" : "no")}</div></div>
+      <div class="kv"><div><span>Days to harvest</span><br><b>${b.days}</b></div><div><span>Water need</span><br><b>${b.water >= 0.7 ? "high" : b.water >= 0.4 ? "medium" : "low"}</b></div><div><span>Yield vs. book</span><br><b class="${b.yieldFactor !== 1 ? "fixed" : ""}">${Math.round(b.yieldFactor * 100)}%</b></div></div>
+      <div class="muted">${esc(b.fact)}</div>
+      ${b.rumor && !b.learned.length ? `<div class="rumor">Unverified: ${esc(b.rumor)}</div>` : ""}
+      ${b.learned.map((l) => `<div class="learned">💡 ${esc(l)}</div>`).join("")}
+    </div>`;
+  }).join("");
+  const wells = s.beliefs.wells.map((w) => `height ${w.elev}: ${w.chance}%${w.tries > 0 ? ` (${w.tries} dug)` : ""}`).join(" · ");
+  $("beliefs").innerHTML = `<div><b>Chance a well strikes water</b><br><span class="muted">${wells}</span></div>
+    <div><b>Expected power</b><br><span class="muted">wind turbine ~${s.beliefs.power.wind_turbine}/day · solar panel ~${s.beliefs.power.solar_array}/day</span></div>
+    ${[...s.beliefs.wellLearned, ...s.beliefs.powerLearned].map((l) => `<div style="color:var(--learn)">💡 ${esc(l)}</div>`).join("")}`;
+  const T = s.techniques;
+  $("techs").innerHTML = Object.entries(T).map(([id, t]) => {
+    const req = Object.entries(t.requires).map(([k, v]) => `${v} ${k}`).join(", ") + (t.alt ? ` (or ${Object.entries(t.alt).map(([k, v]) => `${v} ${k}`).join(", ")})` : "") + (t.tools ? `, tools` : "") + (t.power ? ` · uses ${t.power} power/day` : "");
+    const afford = Object.entries(t.requires).every(([k, v]) => s.inv[k] >= v) || (t.alt && Object.entries(t.alt).every(([k, v]) => s.inv[k] >= v));
+    return `<div class="tech"><b>${esc(t.name)}</b><span class="tag" style="background:${NEED_COLOR[t.need] || "var(--line)"};color:#111">${esc(t.need)}</span>
+      <small>${esc(t.effect)} Needs ${esc(req)}. ${afford ? "<span class='ok'>We have the materials.</span>" : ""}</small><small><i>${esc(t.why)}</i></small></div>`;
+  }).join("");
+}
+
+function renderInspect(s) {
+  const el = $("inspect");
+  if (!selected) { el.className = "muted"; el.textContent = "Click a tile or a person in the 3D view."; }
+  else if (selected.kind === "person") {
+    const p = s.survivors.find((x) => x.id === selected.id);
+    if (!p) { el.textContent = "They didn't make it."; }
+    else {
+      el.className = "";
+      el.innerHTML = `<div><b>${esc(p.name)}</b> <span class="muted">at (${p.x},${p.y})</span></div>
+      <div style="margin:8px 0">${bar(p.health / 100, p.health > 60 ? "var(--good)" : p.health > 30 ? "var(--warn)" : "var(--bad)")}<span class="muted" style="font-size:12px">Health ${p.health}</span></div>
+      <div style="font-size:13px">${esc(p.status || "")}</div>
+      <div class="stock" style="grid-template-columns:repeat(4,1fr);margin-top:8px">${Object.entries(p.skills).map(([k, v]) => `<div><label>${k}</label><span class="num">${v.toFixed(2)}</span></div>`).join("")}</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Skills grow with practice.</div>`;
+    }
+  } else {
+    const t = s.tiles[selected.y * s.W + selected.x];
+    if (!t) { el.textContent = ""; return; }
+    el.className = "";
+    const typeName = { grass: "Grassland", forest: "Forest", rock: "Rock", sand: s.scenario.sterile ? "Regolith" : "Sand", marsh: "Marsh", ruins: "Ruins", ice: "Ice deposit", field: "Field", river: "River", lake: s.scenario.sterile ? "Crater" : "Pond" }[t.type] || t.type;
+    const facts = [
+      `Height ${t.elev}`, `Soil ${Math.round(t.fert * 100)}%`, `Moisture ${Math.round(t.moist * 100)}%`,
+      t.flood ? `Flooded (${t.flood} deep)` : null, t.salt > 0.05 ? `Salt ${Math.round(t.salt * 100)}%` : null, t.contam > 0.05 ? `Contamination ${Math.round(t.contam * 100)}%` : null,
+      t.silt ? "Flood silt" : null, t.wood ? `${t.wood} wood` : null, t.stone ? `${t.stone} stone` : null, t.salvage ? `${t.salvage} salvage left` : null,
+    ].filter(Boolean);
+    let crop = "";
+    if (t.crop) crop = `<div style="margin-top:6px">${esc(s.beliefs.crops[t.crop.type].name)}: ${Math.round(t.crop.growth * 100)}% grown, health ${Math.round(t.crop.health * 100)}%${t.crop.ripe ? " · <b class='ok'>ripe</b>" : ""}</div>`;
+    const st = t.structure ? `<div style="margin-top:6px"><b>${esc(s.techniques[t.structure.type].name)}</b>${t.structure.ok === false ? " (dry)" : ""}${t.structure.heater ? " · heated" : ""}${t.structure.hab ? " · the Hab" : ""}${t.structure.panels ? ` · ${t.structure.panels} panels` : ""}</div>` : "";
+    const flags = ["greenhouse", "lights", "raised", "irrigated", "levee"].filter((k) => t[k]).map((k) => ({ greenhouse: "greenhouse", lights: "grow lights", raised: "raised bed", irrigated: "irrigated", levee: "levee" }[k]));
+    // advisor
+    let advice = "";
+    if (t.field && !t.crop) {
+      const adv = game.sim.cropAdvice(game.sim.tile(t.x, t.y));
+      advice = `<h3 style="margin-top:10px">Which crop here, now?</h3><div class="advice">${adv.map((a) => `<div><span>${esc(a.name)}${a.risk ? ` <span class="muted">(${esc(a.risk)})</span>` : ""}</span><span class="num">${a.expected} food</span></div>`).join("") || "<div class='muted'>No seeds.</div>"}</div>
+      <div class="row" style="margin-top:6px">${adv.filter((a) => a.seeds > 0).map((a) => `<button data-order-plant="${a.crop}">Plant ${esc(a.name.toLowerCase())}</button>`).join("")}</div>`;
+    }
+    const buildable = Object.entries(s.techniques).map(([id, tech]) => ({ id, tech, why: game.sim.whyNot(id, game.sim.tile(t.x, t.y)) })).filter((b) => !b.why);
+    const buttons = [
+      !t.field && !t.structure && ["grass", "marsh", "sand"].includes(t.type) && !s.scenario.sterile ? `<button data-order-till="1">Till a field here</button>` : "",
+      ...buildable.map((b) => `<button data-order-build="${b.id}" title="${esc(b.tech.effect)}">Build ${esc(b.tech.name.toLowerCase())}</button>`),
+    ].join("");
+    el.innerHTML = `<div><b>${typeName}</b> <span class="muted">(${t.x},${t.y})</span></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${facts.join(" · ")}${flags.length ? " · " + flags.join(", ") : ""}</div>${st}${crop}${advice}
+      ${buttons ? `<h3 style="margin-top:10px">Order the colony to…</h3><div class="row">${buttons}</div>` : ""}
+      <div class="err" id="order-err"></div>`;
+  }
+  $("order-count").textContent = s.orders.length ? `${s.orders.length} waiting` : "";
+  $("orders").innerHTML = s.orders.length ? s.orders.map((o) => `<div>${o.kind === "build" ? esc(s.techniques[o.tech].name) : o.kind === "plant" ? `Plant ${esc(s.beliefs.crops[o.crop].name.toLowerCase())}` : "Till a field"} at (${o.x},${o.y})</div>`).join("") + `<button id="cancel-orders" style="margin-top:6px">Cancel all orders</button>` : "None. The colony decides everything itself.";
+}
+
+function renderLog(s) {
+  $("log").innerHTML = s.log.slice().reverse().map((l) => `<div class="${l.kind}">D${l.day} ${l.kind === "learn" ? "💡 " : ""}${esc(l.text)}</div>`).join("");
+  // toasts for new learning, discoveries and deaths
+  const fresh = s.log.filter((l, i) => i >= seenLog && (l.kind === "learn" || l.kind === "death" || (l.kind === "event" && / begins:/.test(l.text))));
+  seenLog = s.log.length;
+  for (const l of fresh.slice(-3)) toast(l);
+}
+function toast(l) {
+  const el = document.createElement("div");
+  el.className = `toast ${l.kind === "learn" ? "" : l.kind}`;
+  el.innerHTML = `<b>${l.kind === "learn" ? "Learned" : l.kind === "death" ? "Loss" : "Warning"}</b>${esc(l.text)}`;
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), l.kind === "learn" ? 7000 : 5000);
+  while ($("toasts").children.length > 3) $("toasts").firstChild.remove();
+}
+
+// ================================================================ actions
+function act(fn) {
+  try { state = fn(); render(); return true; }
+  catch (e) { const el = $("order-err"); if (el) el.textContent = e.message; else console.error(e); return false; }
+}
+function step(n) { if (state && state.running) act(() => game.step(n)); }
+function setPlaying(on) {
+  playing = on; $("play").textContent = on ? "❚❚ Pause" : "▶ Play"; $("play").classList.toggle("on", on);
+  clearInterval(timer); if (on) timer = setInterval(() => step(1), +$("speed").value);
+}
+$("play").onclick = () => setPlaying(!playing);
+$("step").onclick = () => step(1);
+$("step7").onclick = () => step(7);
+$("speed").onchange = () => playing && setPlaying(true);
+document.querySelectorAll("[data-overlay]").forEach((b) => b.onclick = () => { overlay = b.dataset.overlay; document.querySelectorAll("[data-overlay]").forEach((x) => x.classList.toggle("on", x === b)); render(); });
+document.querySelectorAll("[data-priority]").forEach((b) => b.onclick = () => act(() => game.command({ type: "priority", priority: b.dataset.priority })));
+function showTab(name) {
+  document.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
+  ["mind", "book", "place", "log"].forEach((n) => { $(`tab-${n}`).hidden = n !== name; });
+}
+document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b || !selected || selected.kind !== "tile") { if (b && b.id === "cancel-orders") act(() => game.command({ type: "cancel_orders" })); return; }
+  if (b.id === "cancel-orders") return act(() => game.command({ type: "cancel_orders" }));
+  const base = { type: "order", x: selected.x, y: selected.y };
+  if (b.dataset.orderPlant) act(() => game.command({ ...base, kind: "plant", crop: b.dataset.orderPlant }));
+  else if (b.dataset.orderTill) act(() => game.command({ ...base, kind: "till" }));
+  else if (b.dataset.orderBuild) act(() => game.command({ ...base, kind: "build", tech: b.dataset.orderBuild }));
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input, select, textarea") || $("newdlg").open) return;
+  if (e.code === "Space") { e.preventDefault(); if (state && state.running) setPlaying(!playing); }
+  else if (e.key === ".") step(1);
+});
+
+function openNew() {
+  const cur = state ? state.scenario.id : "river_flood";
+  const LEVEL = { after_wave: "Gentle", ash_winter: "Gentle", river_flood: "Moderate", dry_country: "Moderate", red_planet: "Hard" };
+  $("scen-list").innerHTML = Object.entries(FRONTIER_DATA.SCENARIOS).map(([id, sc]) => `<label><input type="radio" name="scen" value="${id}" ${id === cur ? "checked" : ""}>
+    <div><b>${esc(sc.name)}</b> <span class="tag">${LEVEL[id] || ""}</span><small>${esc(sc.blurb)}</small><small><b style="color:var(--ink)">Needs:</b> ${esc(sc.needs)}</small></div></label>`).join("");
+  $("nd-err").textContent = "";
+  $("newdlg").showModal();
+}
+$("newgame").onclick = openNew; $("banner-new").onclick = openNew;
+$("banner-close").onclick = () => { bannerSeen = state.day; $("banner").hidden = true; };
+$("newform").addEventListener("submit", (e) => {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  e.preventDefault();
+  const scen = (document.querySelector('input[name="scen"]:checked') || {}).value || "river_flood";
+  try {
+    setPlaying(false);
+    state = game.new({ scenario: scen, seed: $("nd-seed").value });
+    selected = null; bannerSeen = -1; seenLog = state.log.length;
+    buildWorld(state); render(); $("newdlg").close(); showTab("mind");
+  } catch (err) { $("nd-err").textContent = err.message; }
+});
+
+(function boot() {
+  resize();
+  game = FRONTIER.createFrontier({ scenario: "river_flood", seed: 7 });
+  state = game.state();
+  seenLog = 0;
+  buildWorld(state); render();
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

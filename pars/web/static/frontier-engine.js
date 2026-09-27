@@ -271,7 +271,8 @@
         if (this.isWater(t)) continue;
         // flooding
         const protect = (t.levee ? 2 : 0) + (t.raised ? 1 : 0);
-        const depth = this.sc.terrain.river ? Math.max(0, this.riverLevel - t.elev + 1 - protect) : 0;
+        // a river at level L floods land lower than L; normal level is 0
+        const depth = this.sc.terrain.river ? Math.max(0, this.riverLevel - t.elev - protect) : 0;
         if (t.flood > 0 && depth === 0) {
           t.silt = true; // truth: floodwater leaves fertile silt behind
           t.fert = clamp(t.fert + 0.15, 0, 1);
@@ -523,7 +524,7 @@
       u.food = clamp((18 - foodDays) / 18, 0, 1);
       u.farming = clamp(1 - prodRate / pop, 0, 1) * (foodDays < 60 ? 1 : 0.5);
       u.power = powerNeed > this.power.produced + 0.5 ? clamp(0.35 + (powerNeed - this.power.produced) * 0.08, 0.35, 0.85) : (this.power.produced === 0 ? 0.2 : 0.05);
-      u.growth = pop < 8 && foodDays > 20 && waterNet >= 0 ? 0.25 : 0.05;
+      u.growth = this.sc.noRadio ? 0 : pop < 8 && foodDays > 20 && waterNet >= 0 ? 0.25 : 0.05;
       // player priority boosts one need
       const map = { water: ["water", "waterSource"], food: ["food", "farming"], warmth: ["warmth", "fuel"], power: ["power"], safety: ["safety"] };
       for (const k of map[this.priority] || []) u[k] = Math.min(1, (u[k] || 0) + 0.45);
@@ -559,7 +560,7 @@
       const lvl = Math.max(this.disaster && this.disaster.type === "flood" ? this.disaster.level : 0,
         this.forecast.some((f) => f.event === "flood") ? 2 : 0);
       return this.tiles.filter((t) => this.isLand(t) && (t.crop || t.structure) && !t.levee
-        && t.elev + 1 + (t.raised ? 1 : 0) <= lvl && !(t.crop && this.beliefs.crops[t.crop.type].flood));
+        && t.elev + (t.raised ? 1 : 0) < lvl && !(t.crop && this.beliefs.crops[t.crop.type].flood));
     }
 
     // what can we build, and what's missing?
@@ -635,9 +636,14 @@
       }
       return out.sort((a, b) => b.expected - a.expected);
     }
+    siteForIrrigation(t) {
+      return t.field && !t.irrigated && !this.reserved(t) && this.neighbors(t).some((n) => this.isWater(n) || (n.structure && n.structure.type === "well" && n.structure.ok));
+    }
     fieldScore(t) {
       let s = t.fert * 3 + (t.moist > 0.3 ? 0.5 : 0) - this.dist(t, this.home) * 0.2 - t.salt * 2 - t.contam * 2;
       if (t.type === "marsh") s += 0.3;
+      // in dry country, fields must sit next to water so they can be irrigated
+      if (this.sc.climate.rain < 0.2 && this.neighbors(t).some((n) => this.isWater(n))) s += 2.5;
       if (this.discoveries.silt && t.silt) s += 1.5;
       if (this.sc.terrain.river && t.elev <= 1) s -= this.beliefsFloodWary() ? 1.2 : 0.2;
       return s;
@@ -719,6 +725,11 @@
           const t = spots.reduce((a, b) => (this.dist(b, this.home) < this.dist(a, this.home) ? b : a));
           add({ label: `Forage wild food near (${t.x},${t.y})`, need: "food", value: u.food * 3 * wild, why: `${A.foodDays.toFixed(0)} days of food left`, task: { kind: "gather", res: "forage", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
         }
+        const game = this.sc.game;
+        if (game && this.inv.tools > 0) {
+          const t = spots.length ? spots[spots.length - 1] : null;
+          if (t) add({ label: `${game.name} near (${t.x},${t.y})`, need: "food", value: u.food * 3.2, why: "small game lives in the scrub", task: { kind: "gather", res: "hunt", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
+        }
         const fishing = this.tiles.filter((t) => this.isWater(t) && !this.reserved(t));
         if (fishing.length && this.inv.tools > 0) {
           const t = fishing.reduce((a, b) => (this.dist(b, this.home) < this.dist(a, this.home) ? b : a));
@@ -743,6 +754,9 @@
         }
         if (t.crop && !t.irrigated && t.moist < 0.25 && CROPS[t.crop.type] && this.inv.water > A.pop * 2) {
           add({ label: `Water crops at (${t.x},${t.y})`, need: "food", value: 4 + t.crop.growth * 6, why: "soil is drying out", task: { kind: "water_crop", x: t.x, y: t.y, work: 1 }, skill: "farming" });
+        }
+        if (!t.irrigated && (this.sc.climate.rain < 0.2 || t.crop && t.moist < 0.3) && this.siteForIrrigation(t)) {
+          buildOption("irrigation", 18 * foodValue * (this.sc.climate.rain < 0.2 ? 1.6 : 1), "a channel from the water saves watering by hand every few days", t);
         }
         if (t.greenhouse && !t.lights && (this.sc.climate.sun < 0.6 || this.sc.climate.mean + 12 < 10)) {
           if (this.power.produced - A.powerNeed > 1.5) buildOption("grow_lights", 25 * foodValue, "the greenhouse alone is too dark or too cold", t);
@@ -798,7 +812,7 @@
       if (crisis > 0) {
         for (const c of C) {
           // food you get today counts; fields planted today feed no one for months
-          const foodNow = /^(Forage|Fish|Harvest)/.test(c.label);
+          const foodNow = /^(Forage|Fish|Harvest|Hunt)/.test(c.label);
           const survival = ["safety", "warmth", "water"].includes(c.need) || foodNow && (hungry || c.label.startsWith("Harvest"));
           if (!survival && !(c.why || "").includes("ordered by you")) c.value *= 1 - 0.65 * crisis;
         }
@@ -906,7 +920,7 @@
         this.inv.scrap += Math.round(2 + skill * 1.5);
         const finds = [["wire", 0.35], ["plastic", 0.3], ["tools", 0.08], ["panels", 0.07]];
         for (const [k, p] of finds) if (R.chance(p * skill)) { this.inv[k] += 1; if (k === "panels" || k === "tools") this.note("event", `${s.name} found ${k === "panels" ? "a working solar panel" : "a toolkit"} in the ruins.`); }
-        if (R.chance(0.3)) {
+        if (R.chance(0.18)) {
           const n = R.randint(2, 5);
           this.inv.food += n; this.gainFood(n);
           s.status = `Found ${n} cans of food`;
@@ -926,7 +940,8 @@
         const n = Math.round(base * skill * (t.type === "sand" ? 0.5 : 1)); // desert plants are sparse
         this.inv.food += n; this.gainFood(n);
       }
-      if (res === "fish") { const n = Math.round(this.R.randint(1, 5) * skill * (t.type === "lake" ? 0.6 : 1)); this.inv.food += n; this.gainFood(n); }
+      if (res === "hunt") { const [lo, hi] = this.sc.game.yield; const n = Math.round(this.R.randint(lo, hi) * skill); this.inv.food += n; this.gainFood(n); }
+      if (res === "fish") { const n = Math.round(this.R.randint(0, 4) * skill * (t.type === "lake" ? 0.6 : 1)); this.inv.food += n; this.gainFood(n); }
     }
     finishTask(s, t, task) {
       const R = this.R;
@@ -1143,7 +1158,7 @@
         field: () => t.field && !(id === "greenhouse" ? t.greenhouse : id === "raised_bed" ? t.raised : false),
         greenhouse: () => t.greenhouse && !t.lights,
         field_near_water: () => t.field && !t.irrigated && this.neighbors(t).some((n) => this.isWater(n) || (n.structure && n.structure.type === "well" && n.structure.ok)),
-        floodable: () => this.isLand(t) && !t.levee,
+        floodable: () => this.sc.terrain.river && this.isLand(t) && !t.levee,
       }[site];
       const where = { land: "open dry land", high: "open land", riverbank: "land next to the river", ice: "an ice deposit", shelter: "a shelter without a heater", field: "a field", greenhouse: "a greenhouse without lights", field_near_water: "a field next to water", floodable: "land without a levee" }[site];
       return ok && ok() ? null : `A ${TECHNIQUES[id].name.toLowerCase()} needs ${where}.`;

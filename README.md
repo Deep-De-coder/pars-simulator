@@ -52,6 +52,34 @@ The three levels are drawn as stacked slabs you can orbit (drag) and zoom (scrol
 
 Pinned survivors still flee danger, and the orders are the same commands the Python API exposes (`Simulation.set_focus`, `evacuate`, `pin_role`, `set_doctrine`).
 
+## Frontier mode: start a new life anywhere
+
+```bash
+python -m pars.web            # then open http://127.0.0.1:8765/frontier
+python -m pars.web.build frontier.html --frontier --inline-three   # one offline file
+node pars/web/frontier-batch.js 40                                 # balance report
+```
+
+![Frontier: the river floods](docs/frontier-flood.png)
+
+A second mode about *what you need to survive anywhere*. Survivors arrive somewhere hostile with a few tools, some seeds and a survival handbook, and work out day by day what to do next. One day is one tick; a game is one year.
+
+| Scenario | Situation | What it teaches |
+|---|---|---|
+| The River Rose | Spring flood, grid down | High ground, clean water, power from the river, fertile flood silt |
+| Ash Winter | Autumn, ash-dimmed sun, contaminated soil | Shelter and firewood first, cold-hardy crops, sunflowers clean soil |
+| Dry Country | Desert spring | Oases, wells in low ground, solar stills, irrigation channels |
+| After the Wave | Tsunami coast, salted fields | Clean water, salt-tolerant crops, storms |
+| Red Planet | A tribute to *The Martian* | Heated hab, water from ice, soil from regolith plus compost, potatoes under grow lights |
+
+**The colony mind** ranks needs in the order survival instructors teach (the rule of threes: safety, then shelter, water, food, power), lists every action its handbook says is possible *right now* given the tiles, weather forecast and stores, works backwards to gather missing materials, and assigns people by skill. The **Colony mind** tab shows its reasoning each day: the needs, the options it weighed (including blocked ones and what they're missing), and who does what. The **Selected** tab has a crop advisor ("which crop here, now?") that uses the colony's beliefs, not the true numbers.
+
+**Learning.** The handbook is deliberately wrong in places (corn "survives light frost", beans "don't mind wet feet", potatoes "survive a hard frost", an optimistic sweet-potato yield, wells that "work anywhere", nameplate wind and solar output). The colony corrects these from what actually happens and shows each correction as a 💡 note, and it discovers things the handbook never mentioned, such as flood silt making land more fertile. Skills also improve with practice.
+
+**What you can do:** set a colony priority, or click a tile to order a field tilled, a crop planted or a structure built. Invalid orders are refused with the reason. Overriding the colony has consequences: pinning *Water* forever can starve everyone.
+
+The Frontier engine is JavaScript only (`pars/web/static/frontier-*.js`), so it runs in the browser. `tests/test_frontier.py` drives it through Node.
+
 ## How a turn works
 
 1. **Environment**: the next forecast event starts on a calm turn. Hazards hit the levels each disaster affects, then decay toward each level's baseline (half-life of about 4 turns). Resources regrow. *Escalation* raises disaster frequency and intensity over time.

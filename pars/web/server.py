@@ -145,6 +145,11 @@ def make_handler(game):
             elif self.path == "/vendor/three.min.js":
                 self._send(200, (STATIC / "vendor" / "three.min.js").read_bytes(),
                            "application/javascript; charset=utf-8")
+            elif self.path in ("/frontier", "/frontier.html"):
+                self._send(200, (STATIC / "frontier.html").read_bytes(), "text/html; charset=utf-8")
+            elif self.path in ("/frontier-data.js", "/frontier-engine.js", "/engine.js"):
+                self._send(200, (STATIC / self.path.lstrip("/")).read_bytes(),
+                           "application/javascript; charset=utf-8")
             elif self.path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
             elif self.path == "/api/state":
@@ -184,6 +189,7 @@ def main(argv=None):
     server = ThreadingHTTPServer((args.host, args.port), make_handler(game))
     url = f"http://{args.host}:{args.port}/"
     print(f"PARS 3D running at {url}  (Ctrl+C to stop)")
+    print(f"PARS Frontier (survival mode) at {url}frontier")
     if not args.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
