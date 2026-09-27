@@ -6,6 +6,7 @@ PARS - Post-disaster Evolutionary Survival Coordinator
 import argparse
 import json
 import sys
+import time
 
 from pars.config import DIFFICULTIES, DEFAULT_DIFFICULTY, DOCTRINES, DEFAULT_DOCTRINE
 from pars.report import build_report
@@ -88,6 +89,7 @@ def main(argv=None):
             sim = Simulation(renderer=dash, **sim_kwargs)
             try:
                 reason = sim.run(max_turns=args.max_turns, delay_ms=args.delay)
+                time.sleep(max(1.5, args.delay / 1000.0))  # let the final frame be seen
             except KeyboardInterrupt:
                 reason = "INTERRUPTED"
 
