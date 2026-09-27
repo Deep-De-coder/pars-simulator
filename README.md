@@ -109,24 +109,29 @@ Set how often they strike (calm, normal, frequent, relentless) or **unleash** an
 **Training.** Learning also carries across lives:
 
 - *Remember what they learned & start again* at the end of a year: the next colony inherits every correction and lesson.
-- `node pars/web/static/frontier-train.js` (parallel, about 20 minutes) builds the *Pre-trained veteran* in `frontier-brain.js`:
+- `node pars/web/static/frontier-train.js` (parallel, about 30 minutes) builds the *Pre-trained veteran* in `frontier-brain.js`:
   1. It lives 60 simulated years across all five places, each year inheriting the last one's knowledge.
   2. For each place, it tests every piece of knowledge on its own against the novice, on the same validation games, and keeps a piece only with solid evidence (at least 2 standard errors).
   3. For each place, it searches the colony's 20 decision weights with a cross-entropy method. Candidates are scored by their advantage over the defaults on identical games, and the result is kept only if it beats the defaults on separate validation games (again at 2 standard errors).
-  4. It reports results on fresh seeds that played no part in any of those choices.
+  4. Each place's chosen bundle is then compared with the novice **once** on 60 games that played no part in choosing it, and kept only if it wins by 2 standard errors there.
+  5. It reports results on fresh seeds that played no part in any of those choices.
 
-  Result on fresh seeds on the current engine (48 years per place, normal and frequent disasters):
+  Step 4 was added after the same failure happened three times: a pick passed validation and then lost on the test (boil water in The River Rose, boil water in Dry Country, and tuned weights in Ash Winter, +7.5 ± 2.2 on validation, then 44 → 41 thriving). The cause was the winner's curse. The validation games were used to screen 8 lessons and pick the best of 9 weight sets, and then to judge that pick, so its score was inflated. With the confirmation step, the first pick it checked (a firebreak lesson for The River Rose, +5.9 ± 2.5 on validation) scored +3.3 ± 2.0 on unseen games and was dropped.
 
-  | Place | Novice (thrived/survived/perished) | Veteran | What training kept |
-  |---|---|---|---|
-  | The River Rose | 42/6/0 | 42/6/0 | nothing reliable |
-  | Ash Winter | 35/11/2 | 35/11/2 | nothing reliable |
-  | Dry Country | 27/21/0 | 27/21/0 | nothing (see below) |
-  | After the Wave | 45/1/2 | 45/1/2 | nothing reliable |
-  | Red Planet | 9/21/18 | **21/11/16** | tuned decisions (+12.7 ± 7.3 points/year) |
-  | **Overall** | 66% thriving, 9% perished | **71% thriving, 8% perished** | |
+  Result on fresh seeds (48 years per place): **the trained veteran keeps nothing and plays exactly like the novice** (82% thriving, 4% perished). Nothing it found survived an honest check. The previous veteran, whose weights were tuned on an older engine, is now worse than the novice on Mars (14 colonies perished vs 9), so it was replaced. Applying all knowledge everywhere still hurts (9% perished).
 
-  Honest notes: the gain comes almost entirely from Red Planet. Elsewhere training correctly found nothing it could trust, and plays like the novice. Applying *all* knowledge everywhere doesn't help (68% thriving, and *more* deaths, 12%), because lessons that help in one place hurt in another. Boiling water, for example, is worth points in the flooded valley but costs scarce firewood in Ash Winter and the desert. The 2-standard-error bar is still not a guarantee: this run kept "boil water" for Dry Country (+5.4 ± 2.5 on validation) and it lost on the first test (32 → 25 thriving), just as the previous run's River Rose pick did. It was dropped, and the table above comes from a new set of fresh seeds. The previous veteran scored 72% on the same seeds, but was slightly worse than the novice in Ash Winter (4 perished vs 2). Earlier attempts also exposed planner bugs that are now fixed (accurate lessons overshooting, local soil effects learned as universal, power undervalued once real turbine output was known).
+**Rounds of improvement.** The gains came from diagnosing where colonies fail and giving the colony knowledge a real survivor could have, not the answers. Each change was kept only if a paired A/B on fresh seeds showed it wasn't harmful:
+
+| Round | What was missing | What the colony got | Paired A/B |
+|---|---|---|---|
+| 1 | Mars potatoes froze when storms tore greenhouse covers | Brace covers before storms; patch a torn cover the same day (only if the crop would freeze, by its own frost beliefs); lights off over empty beds; learn from power-cut freezes | Mars perished 12 → 3 of 40 |
+| 2 | Dry Country fields sat empty all winter: greenhouses were only considered in cold climates | Ask the crop advisor "what could I grow here under a cover, or a cover with lights?" and build when the gain is large | +4.1 ± 1.4 (Dry Country thriving 52 → 72 of 80) |
+| 3 | Mars colonies replanted into dark greenhouses after power failures, and one low-output day froze every lit plot | Only count on lights that will have power; reserve power per lit planting; where a cut would kill even the hardiest crop, plan on bad days (10th percentile of its own 30-day power record) | +3.1 ± 1.5 (Mars thriving 19 → 50 of 80) |
+| 4 | Greenhouse potatoes cooked in summer (61% of full speed) | Learn to vent after seeing heat stalls | neutral (+0.3 ± 0.7), kept for realism |
+
+Tried and reverted: sizing the farm up (more fields hurt Ash Winter and Dry Country, where labour is the limit); watering every crop to its need (−1 to −8 on Earth, where water is hauled by hand; left as a trainable weight defaulting to off); only running the radio when food covers another person (−8.0 ± 0.9). Some fixes had to be made consequence-aware after a first version hurt another place: patching and bracing cost Ash Winter until they were gated on the crop actually freezing, and planning on bad-day power cost Ash Winter −7.6 until it was limited to places where a cut is lethal.
+
+  Overall, rounds 1–4 vs. the engine before them, on 240 fresh paired games: **+8.1 ± 2.2 points/year**. Thriving went from 69% to 82% and colonies lost from 19 to 9. By place: Red Planet thriving 8 → 28 and perished 17 → 9, Dry Country 32 → 40, Ash Winter 38 → 42 (perished 2 → 0), River Rose flat, After the Wave −2.1 ± 2.5 (within noise). What remains: Mars still loses about 1 colony in 5 to weeks-long power collapses and a first harvest that comes too late for the starting stores.
 - The **Training** tab shows those results and the training curve, and can keep training in the page (live 10 more years, or evolve 3 more generations). Your own colony is saved in the browser.
 
 **What you can do:** set a colony priority, or click a tile to order a field tilled, a crop planted or a structure built. Invalid orders are refused with the reason. Overriding the colony has consequences: pinning *Water* forever can starve everyone.
