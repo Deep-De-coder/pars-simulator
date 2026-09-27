@@ -11,6 +11,8 @@ Each turn the coordinator:
      and fills those roles with the best-suited survivors.
 """
 
+import math
+
 from pars.config import get_doctrine
 
 LOG_LIMIT = 200
@@ -186,8 +188,7 @@ class CoordinatorAgent:
             # doctrine's target buffer (a baseline crew always forages).
             target = max(1.0, n_alive * self.doctrine.buffer_days)
             deficit = min(1.0, max(0.0, (target - stock) / target))
-            foragers = max(1, -(-len(free) * (0.25 + 0.65 * deficit) // 1))
-            foragers = int(foragers)
+            foragers = max(1, math.ceil(len(free) * (0.25 + 0.65 * deficit)))
         foragers = min(foragers, len(free))
 
         builders = 0
