@@ -64,6 +64,8 @@ node pars/web/frontier-batch.js 40                                 # balance rep
 
 A second mode about *what you need to survive anywhere*. Survivors arrive somewhere hostile with a few tools, some seeds and a survival handbook, and work out day by day what to do next. One day is one tick; a game is one year.
 
+The world is a 3D diorama: a smooth heightmap with slope-aware rock and soil, a water surface that rises over low ground in a flood, a sky and fog that follow the weather (rain, snow, dust, ash, lightning), soft shadows, and survivors who walk to the tile they're working. Drag to orbit, scroll to zoom, click a tile or person to inspect it.
+
 | Scenario | Situation | What it teaches |
 |---|---|---|
 | The River Rose | Spring flood, grid down | High ground, clean water, power from the river, fertile flood silt |
@@ -74,7 +76,19 @@ A second mode about *what you need to survive anywhere*. Survivors arrive somewh
 
 **The colony mind** ranks needs in the order survival instructors teach (the rule of threes: safety, then shelter, water, food, power), lists every action its handbook says is possible *right now* given the tiles, weather forecast and stores, works backwards to gather missing materials, and assigns people by skill. The **Colony mind** tab shows its reasoning each day: the needs, the options it weighed (including blocked ones and what they're missing), and who does what. The **Selected** tab has a crop advisor ("which crop here, now?") that uses the colony's beliefs, not the true numbers.
 
-**Learning.** The handbook is deliberately wrong in places (corn "survives light frost", beans "don't mind wet feet", potatoes "survive a hard frost", an optimistic sweet-potato yield, wells that "work anywhere", nameplate wind and solar output). The colony corrects these from what actually happens and shows each correction as a 💡 note, and it discovers things the handbook never mentioned, such as flood silt making land more fertile. Skills also improve with practice.
+**Learning.** The handbook is deliberately wrong in places (corn "survives light frost", beans "don't mind wet feet", potatoes "survive a hard frost", an optimistic sweet-potato yield, wells that "work anywhere", nameplate wind and solar output, optimistic salvage and fishing rates). The colony corrects these from what actually happens and shows each correction as a 💡 note. It also discovers things the handbook never mentioned, such as flood silt making land more fertile, and it fits a rule for wells (water lies deeper under high ground) from the wells it digs, rather than just a table. Skills also improve with practice.
+
+**Is it learning the right things?** The engine knows the hidden truth, so the **Handbook** tab scores every belief against it ("How right are we?") and keeps a yield book of handbook guesses vs. what work actually returned. Averages over 12 games per place (6 four-life runs for the "after 4 lives" column):
+
+| Place | Start (handbook) | After 1 year | After 4 lives | Right, of facts with evidence (1 year) |
+|---|---|---|---|---|
+| The River Rose | 58% | 66% | 83% | 90% (6.3 facts) |
+| Ash Winter | 67% | 73% | 88% | 100% (1.8) |
+| Dry Country | 52% | 59% | 81% | 97% (1.7) |
+| After the Wave | 70% | 74% | 91% | 100% (2.4) |
+| Red Planet | 44% | 68% | 82% | 88% (0.6) |
+
+What this does and doesn't show: where the colony has evidence it is nearly always right, but within one year it only gets evidence for a handful of facts. A frost limit is only revealed by a frost below it, flood tolerance by a flood over the crop, and a well rate by several wells. The colony doesn't go looking for that evidence, so most of the improvement comes from carrying knowledge across lives. Two fixes came out of measuring this: yield lessons are only announced when the gap beats 2.5 standard errors (false salvage "lessons" fell from 66 to 3 over 60 games, precision 55% → 93%), and crops that wilt in floodwater now teach the colony, not only crops that die (before, the colony learned nothing in 7 of 12 River Rose games where beans were flooded and survived). A frost death still gives only a bound ("dies at −4 °C"), not the exact limit.
 
 **Disasters.** Ten kinds, each with its own mechanics, a handbook response and, for most, a lesson the colony can only learn by living through it:
 
@@ -101,18 +115,18 @@ Set how often they strike (calm, normal, frequent, relentless) or **unleash** an
   3. For each place, it searches the colony's 16 decision weights with a cross-entropy method. Candidates are scored by their advantage over the defaults on identical games, and the result is kept only if it beats the defaults on separate validation games (again at 2 standard errors).
   4. It reports results on fresh seeds that played no part in any of those choices.
 
-  Result on fresh seeds (48 years per place, normal and frequent disasters):
+  Result on fresh seeds on the current engine (48 years per place, normal and frequent disasters):
 
   | Place | Novice (thrived/survived/perished) | Veteran | What training kept |
   |---|---|---|---|
-  | The River Rose | 31/16/1 | 31/16/1 | nothing reliable |
-  | Ash Winter | 40/6/2 | 43/3/2 | tuned decisions |
-  | Dry Country | 14/34/0 | 14/34/0 | nothing reliable |
-  | After the Wave | 48/0/0 | 48/0/0 | nothing reliable |
-  | Red Planet | 8/24/16 | **31/8/9** | tuned decisions |
-  | **Overall** | 59% thriving, 8% perished | **70% thriving, 5% perished** | |
+  | The River Rose | 42/6/0 | 42/6/0 | nothing reliable |
+  | Ash Winter | 35/11/2 | 35/11/2 | nothing reliable |
+  | Dry Country | 27/21/0 | 27/21/0 | nothing (see below) |
+  | After the Wave | 45/1/2 | 45/1/2 | nothing reliable |
+  | Red Planet | 9/21/18 | **21/11/16** | tuned decisions (+12.7 ± 7.3 points/year) |
+  | **Overall** | 66% thriving, 9% perished | **71% thriving, 8% perished** | |
 
-  Honest notes: applying *all* knowledge everywhere barely helps (62% thriving), because lessons that help in one place hurt in another. For example, boiling water is worth +8 to +11 points a year in the flooded valley but −5 to −8 in Ash Winter, where firewood is precious. The first run, with a looser 1-standard-error bar, kept "boil water" for The River Rose and lost there on the test. The bar was raised to 2 standard errors and the numbers above come from a new set of fresh seeds. Earlier attempts also exposed planner bugs that are now fixed (accurate lessons overshooting, local soil effects learned as universal, power undervalued once real turbine output was known).
+  Honest notes: the gain comes almost entirely from Red Planet. Elsewhere training correctly found nothing it could trust, and plays like the novice. Applying *all* knowledge everywhere doesn't help (68% thriving, and *more* deaths, 12%), because lessons that help in one place hurt in another. Boiling water, for example, is worth points in the flooded valley but costs scarce firewood in Ash Winter and the desert. The 2-standard-error bar is still not a guarantee: this run kept "boil water" for Dry Country (+5.4 ± 2.5 on validation) and it lost on the first test (32 → 25 thriving), just as the previous run's River Rose pick did. It was dropped, and the table above comes from a new set of fresh seeds. The previous veteran scored 72% on the same seeds, but was slightly worse than the novice in Ash Winter (4 perished vs 2). Earlier attempts also exposed planner bugs that are now fixed (accurate lessons overshooting, local soil effects learned as universal, power undervalued once real turbine output was known).
 - The **Training** tab shows those results and the training curve, and can keep training in the page (live 10 more years, or evolve 3 more generations). Your own colony is saved in the browser.
 
 **What you can do:** set a colony priority, or click a tile to order a field tilled, a crop planted or a structure built. Invalid orders are refused with the reason. Overriding the colony has consequences: pinning *Water* forever can starve everyone.
