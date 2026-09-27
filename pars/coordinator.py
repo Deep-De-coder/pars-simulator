@@ -11,6 +11,8 @@ Each turn the coordinator:
      and fills those roles with the best-suited survivors.
 """
 
+from pars.config import get_doctrine
+
 LOG_LIMIT = 200
 
 # Which levels each disaster makes worse (used for forecast look-ahead).
@@ -22,11 +24,10 @@ DISASTER_THREAT = {
     "Cave-In Threat": {-1: 6.0},
 }
 
-MOVE_THRESHOLD = 3.0  # min danger improvement (HP/turn) worth a climb
-
 
 class CoordinatorAgent:
-    def __init__(self, grid, tech_tree):
+    def __init__(self, grid, tech_tree, doctrine=None):
+        self.doctrine = get_doctrine(doctrine)
         self.grid = grid
         self.tech_tree = tech_tree
         self.thought_log = []
@@ -36,7 +37,7 @@ class CoordinatorAgent:
         self._last_plan = None
 
     def log(self, msg):
-        self.thought_log.append(msg)
+        self.thought_log.append(f"T{self.turn:<3} {msg}")
         if len(self.thought_log) > LOG_LIMIT:
             del self.thought_log[:-LOG_LIMIT]
 
@@ -99,7 +100,6 @@ class CoordinatorAgent:
     def formulate_plan(self, survivors, intel, stockpile):
         """Decide the colony's strategic priority for this turn."""
         self.turn += 1
-        self.log(f"--- Turn {self.turn} ---")
 
         unlocked = self.tech_tree.try_unlock_next()
         if unlocked:
@@ -125,7 +125,7 @@ class CoordinatorAgent:
             plan = "BUILD"
             self.active_plan = f"Build {self.tech_tree.get_available_construction()[0]}."
         elif (intel["alive_count"] < 12 and intel["avg_health"] > 65
-              and intel["avg_hunger"] < 35 and food_days > 6):
+              and intel["avg_hunger"] < 35 and food_days > self.doctrine.breed_food_days):
             plan = "EXPAND"
             self.active_plan = "Colony healthy. Encourage reproduction."
         else:
@@ -162,10 +162,11 @@ class CoordinatorAgent:
             here = self.danger_for(s, s.z, levels, prot)
             best_z = min(levels, key=lambda z: self.danger_for(s, z, levels, prot))
             best = self.danger_for(s, best_z, levels, prot)
-            if best_z != s.z and here - best >= MOVE_THRESHOLD and s.energy > 15:
+            doc = self.doctrine
+            if best_z != s.z and here - best >= doc.move_threshold and s.energy > 15:
                 s.role = f"Move To Z={best_z}"
                 moved += 1
-            elif s.health < 30 or s.energy < 25 or (plan == "HEALTH_FOCUS" and s.radiation > 30):
+            elif s.health < 30 or s.energy < doc.rest_energy or (plan == "HEALTH_FOCUS" and s.radiation > 30):
                 s.role = "Rest"
             else:
                 free.append(s)
@@ -177,18 +178,21 @@ class CoordinatorAgent:
 
         # 2. How many of each job do we need?
         n_alive = len(alive)
-        consumption = n_alive * 1.2  # rough biomass+water units per turn
         stock = min(stockpile.get("water", 0), stockpile.get("biomass", 0))
         if plan in ("FORAGE_PRIORITY", "SURVIVAL", "DISASTER_RESPONSE"):
             foragers = len(free)
         else:
-            # Enough foragers to cover consumption, more when stocks are thin.
-            foragers = max(1, round(consumption / 6 * (1.8 if stock < n_alive * 6 else 1.0)))
+            # Staff foragers in proportion to how far supplies are below the
+            # doctrine's target buffer (a baseline crew always forages).
+            target = max(1.0, n_alive * self.doctrine.buffer_days)
+            deficit = min(1.0, max(0.0, (target - stock) / target))
+            foragers = max(1, -(-len(free) * (0.25 + 0.65 * deficit) // 1))
+            foragers = int(foragers)
         foragers = min(foragers, len(free))
 
         builders = 0
         if self.tech_tree.current_project and stockpile.get("scrap", 0) > 0:
-            builders = max(1, min(3, stockpile["scrap"] // 8))
+            builders = max(1, min(self.doctrine.max_builders, stockpile["scrap"] // 8))
             if plan in ("FORAGE_PRIORITY", "SURVIVAL"):
                 builders = 0
         remaining = len(free) - foragers
@@ -197,9 +201,25 @@ class CoordinatorAgent:
         # 3. Fill jobs by gene fit.
         pool = list(free)
         pool.sort(key=lambda s: s.genes["foraging"], reverse=True)
+        scarce = "biomass" if stockpile.get("biomass", 0) <= stockpile.get("water", 0) else "water"
+        imbalanced = stockpile.get(scarce, 0) * 2 < max(stockpile.get("water", 0),
+                                                        stockpile.get("biomass", 0))
+        relocated = 0
         for s in pool[:foragers]:
             s.role = "Forage"
             s.forage_target = "supplies"
+            # Send some foragers to where the scarce supply actually grows,
+            # if that level is not meaningfully more dangerous.
+            if imbalanced and levels[s.z][scarce] < 6 and relocated < max(1, foragers // 2):
+                here = self.danger_for(s, s.z, levels, prot)
+                options = [z for z in levels if z != s.z and levels[z][scarce] > 10
+                           and self.danger_for(s, z, levels, prot) <= here + 0.5]
+                if options and s.energy > 30:
+                    target = max(options, key=lambda z: levels[z][scarce])
+                    s.role = f"Move To Z={target}"
+                    relocated += 1
+        if relocated:
+            self.log(f"🧭 Sending {relocated} forager(s) toward {scarce}.")
         pool = pool[foragers:]
         pool.sort(key=lambda s: s.genes["intelligence"], reverse=True)
         for s in pool[:builders]:
@@ -207,7 +227,8 @@ class CoordinatorAgent:
         for s in pool[builders:]:
             # Scrap is the bottleneck for building: send spare hands to salvage
             # if we have a project waiting on it, otherwise research.
-            if self.tech_tree.current_project and stockpile.get("scrap", 0) < 10:
+            if (self.tech_tree.current_project
+                    and stockpile.get("scrap", 0) < self.doctrine.salvage_below):
                 s.role = "Forage"
                 s.forage_target = "scrap"
             elif self.tech_tree.next_research_target() is None and not self.tech_tree.current_project:

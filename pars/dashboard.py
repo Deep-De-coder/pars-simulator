@@ -41,6 +41,11 @@ def render_level_map(grid, z, survivors, width, height):
     header = LEVEL_LABELS.get(z, f"Z={z}")
     color = LEVEL_COLORS.get(z, "white")
     lines.append(f"[bold {color}]{header}[/bold {color}]")
+    cells = [grid.get_cell(x, y, z) for y in range(height) for x in range(width)]
+    n = max(1, len(cells))
+    lines.append(f"[dim]rad {sum(c['radiation'] for c in cells) / n:.0f}  "
+                 f"tox {sum(c['toxicity'] for c in cells) / n:.0f}  "
+                 f"{sum(c['temperature'] for c in cells) / n:.0f}°C[/dim]")
 
     # Build a grid with resource info and survivors
     for y in range(height):
@@ -62,8 +67,16 @@ def render_level_map(grid, z, survivors, width, height):
                     icon = "◉"
                 row_parts.append(f"[bold yellow]{icon}[/bold yellow] ")
             else:
-                # Show resource or empty tile
-                if cell["biomass"] > 10:
+                # Hazards take priority over resources so danger is visible.
+                if cell["toxicity"] > 40:
+                    row_parts.append("[magenta]☣ [/magenta]")
+                elif cell["radiation"] > 50:
+                    row_parts.append("[red]☢ [/red]")
+                elif z == -1 and cell["cave_in_risk"] > 40:
+                    row_parts.append("[dark_orange]▼ [/dark_orange]")
+                elif cell["temperature"] < -15:
+                    row_parts.append("[bright_white]❄ [/bright_white]")
+                elif cell["biomass"] > 10:
                     row_parts.append("[green]♣ [/green]")
                 elif cell["water"] > 10:
                     row_parts.append("[blue]≈ [/blue]")
@@ -96,6 +109,14 @@ def render_stats_panel(intel, stockpile, tech_tree, survivors, turn):
     table.add_row("Surface (Z=0)", f"{intel['surface_pop']} survivors")
     table.add_row("Underground (Z=-1)", f"{intel['underground_pop']} survivors")
     table.add_row("Mountains (Z=1)", f"{intel['mountain_pop']} survivors")
+    alive = [s for s in survivors if s.health > 0]
+    if alive:
+        table.add_row("─" * 30, "─" * 10)
+        gens = max(s.generation for s in alive)
+        table.add_row("Latest generation", f"Gen {gens}")
+        for g, label in (("rad_resistance", "Avg RadRes"), ("cold_resistance", "Avg ColdRes"),
+                         ("intelligence", "Avg Intellect")):
+            table.add_row(label, f"{sum(s.genes[g] for s in alive) / len(alive):.2f}")
     return Panel(table, title="📊 COLONY STATS", border_style="green")
 
 
@@ -165,7 +186,7 @@ def build_layout(grid, survivors, intel, stockpile, tech_tree, coordinator, turn
     """Assemble the full Rich dashboard layout."""
     layout = Layout()
     layout.split_column(
-        Layout(name="header", size=3),
+        Layout(name="header", size=4),
         Layout(name="body"),
         Layout(name="footer", size=3),
     )
@@ -185,13 +206,18 @@ def build_layout(grid, survivors, intel, stockpile, tech_tree, coordinator, turn
 
     # Header
     disaster_str = DISASTER_ICONS.get(grid.current_disaster, grid.current_disaster)
-    disaster_info = f" | {disaster_str}"
+    disaster_info = disaster_str
     if grid.disaster_duration > 0:
         disaster_info += f" ({grid.disaster_duration}t left)"
     forecast = " → ".join(DISASTER_ICONS.get(d, d) for d in grid.disaster_forecast[:3])
     header_text = Text()
     header_text.append("🔨 PARS — Post-disaster Evolutionary Survival Coordinator", style="bold white on dark_red")
     header_text.append(f"\nActive: {disaster_info}  |  Forecast: {forecast}")
+    settings = getattr(coordinator, "doctrine", None)
+    diff = getattr(grid, "difficulty", None)
+    if settings and diff:
+        header_text.append(f"  |  {diff.name.title()} · {settings.name.title()} doctrine · "
+                           f"escalation x{grid.escalation:.2f}", style="dim")
     layout["header"].update(Panel(header_text, border_style="red"))
 
     # Maps: render 3 level slices

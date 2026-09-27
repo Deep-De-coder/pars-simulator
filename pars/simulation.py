@@ -8,14 +8,15 @@ from pars.environment import Grid3D
 from pars.survivor import Survivor, reset_ids
 from pars.coordinator import CoordinatorAgent
 from pars.tech import TechTree
-from pars.config import get_difficulty
+from pars.config import get_difficulty, get_doctrine
+from pars.report import gene_averages
 
 MAX_POPULATION = 30
 
 
 class Simulation:
     def __init__(self, width=5, height=5, starting_population=6, seed=None,
-                 renderer=None, difficulty=None):
+                 renderer=None, difficulty=None, doctrine=None):
         if width < 3 or height < 3:
             raise ValueError("Grid must be at least 3x3")
         if starting_population < 1:
@@ -25,6 +26,7 @@ class Simulation:
         reset_ids()
 
         self.difficulty = get_difficulty(difficulty)
+        self.doctrine = get_doctrine(doctrine)
         self.seed = seed
 
         # renderer(sim) is called once per turn; None runs headless.
@@ -40,7 +42,7 @@ class Simulation:
         self.grid = Grid3D(width=width, height=height, z_levels=[-1, 0, 1],
                            difficulty=self.difficulty)
         self.tech_tree = TechTree(cost_mult=self.difficulty.tech_cost)
-        self.coordinator = CoordinatorAgent(self.grid, self.tech_tree)
+        self.coordinator = CoordinatorAgent(self.grid, self.tech_tree, self.doctrine)
 
         start = self.difficulty.starting_stock
         self.stockpile = {"scrap": 0, "water": start, "biomass": start}
@@ -58,6 +60,8 @@ class Simulation:
                 z=random.choice([-1, 0, 0, 1]),
                 generation=1,
             ))
+        self.initial_genes = gene_averages(self.survivors)
+        self.history = []  # one compact snapshot per turn
 
     @property
     def alive(self):
@@ -100,6 +104,7 @@ class Simulation:
 
         intel = self.coordinator.gather_intel(self.survivors, self.stockpile)
         self.stats["peak_population"] = max(self.stats["peak_population"], intel["alive_count"])
+        self._record(intel)
         self._render(intel)
 
         result = self.coordinator.check_win_lose(self.survivors, intel, self.stockpile)
@@ -108,6 +113,41 @@ class Simulation:
             self.game_over_reason = result
 
         return intel
+
+    def _record(self, intel):
+        genes = gene_averages(self.survivors)
+        self.history.append({
+            "turn": self.turn,
+            "alive": intel["alive_count"],
+            "avg_health": round(intel["avg_health"], 1),
+            "avg_hunger": round(intel["avg_hunger"], 1),
+            "avg_radiation": round(intel["avg_radiation"], 1),
+            "scrap": self.stockpile["scrap"],
+            "water": self.stockpile["water"],
+            "biomass": self.stockpile["biomass"],
+            "research_points": self.tech_tree.research_points,
+            "tech_completed": self.tech_tree.completed_count(),
+            "disaster": self.grid.current_disaster,
+            "escalation": round(self.grid.escalation, 2),
+            "pop_by_z": {"-1": intel["underground_pop"], "0": intel["surface_pop"],
+                         "1": intel["mountain_pop"]},
+            "genes": {g: round(v, 3) for g, v in genes.items()},
+        })
+
+    def to_dict(self):
+        """Serializable summary of the run (settings, outcome, stats, history)."""
+        return {
+            "settings": {"width": self.width, "height": self.height, "seed": self.seed,
+                         "difficulty": self.difficulty.name, "doctrine": self.doctrine.name},
+            "outcome": self.game_over_reason,
+            "turns": self.turn,
+            "stats": self.stats,
+            "initial_genes": self.initial_genes,
+            "tech": {k: {"unlocked": v["unlocked"], "completed": v["completed"],
+                         "progress": v["progress"], "cost": v["cost"]}
+                     for k, v in self.tech_tree.projects.items()},
+            "history": self.history,
+        }
 
     def _render(self, intel):
         self.last_intel = intel
@@ -160,7 +200,7 @@ class Simulation:
         if pop >= MAX_POPULATION or plan in ("DISASTER_RESPONSE", "SURVIVAL",
                                              "FORAGE_PRIORITY"):
             return
-        max_births = 2 if plan == "EXPAND" else 1
+        max_births = self.doctrine.max_births if plan == "EXPAND" else 1
         births = 0
         for i, s1 in enumerate(alive):
             if births >= max_births:

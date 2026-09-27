@@ -4,9 +4,11 @@ PARS - Post-disaster Evolutionary Survival Coordinator
 """
 
 import argparse
+import json
 import sys
 
-from pars.config import DIFFICULTIES, DEFAULT_DIFFICULTY
+from pars.config import DIFFICULTIES, DEFAULT_DIFFICULTY, DOCTRINES, DEFAULT_DOCTRINE
+from pars.report import build_report
 from pars.simulation import Simulation
 
 
@@ -23,10 +25,15 @@ def parse_args(argv=None):
     p.add_argument("--max-turns", type=int, default=0, help="Max turns (0=unlimited)")
     p.add_argument("--difficulty", choices=list(DIFFICULTIES), default=DEFAULT_DIFFICULTY,
                    help="Disaster frequency/intensity, regrowth and tech cost preset")
+    p.add_argument("--doctrine", choices=list(DOCTRINES), default=DEFAULT_DOCTRINE,
+                   help="Coordinator strategy: " + "; ".join(
+                       f"{d.name}: {d.description}" for d in DOCTRINES.values()))
     p.add_argument("--headless", action="store_true",
                    help="Skip the dashboard; print a status line every --report-every turns")
     p.add_argument("--report-every", type=int, default=10,
                    help="Headless status line interval in turns (0=final summary only)")
+    p.add_argument("--export", metavar="PATH",
+                   help="Write settings, stats and per-turn history as JSON")
     args = p.parse_args(argv)
     if args.width < 3 or args.height < 3:
         p.error("--width and --height must be at least 3")
@@ -64,12 +71,13 @@ def main(argv=None):
     print(f"Seed: {seed_str}")
     print(f"Max turns: {turns_str}")
     print(f"Difficulty: {args.difficulty}")
+    print(f"Doctrine: {args.doctrine}")
     print("=" * 60)
     print()
 
     sim_kwargs = dict(width=args.width, height=args.height,
                       starting_population=args.population, seed=args.seed,
-                      difficulty=args.difficulty)
+                      difficulty=args.difficulty, doctrine=args.doctrine)
 
     if args.headless:
         sim = Simulation(renderer=headless_reporter(args.report_every), **sim_kwargs)
@@ -83,10 +91,17 @@ def main(argv=None):
             except KeyboardInterrupt:
                 reason = "INTERRUPTED"
 
+    if reason == "INTERRUPTED":
+        sim.game_over_reason = reason
     print()
     print("=" * 60)
     print(f"SIMULATION ENDED: {reason} after {sim.turn} turns")
     print("=" * 60)
+    print(build_report(sim, sim.initial_genes))
+    if args.export:
+        with open(args.export, "w") as f:
+            json.dump(sim.to_dict(), f, indent=2)
+        print(f"\nRun exported to {args.export}")
     return 0 if reason in ("RESTORATION", "MAX_TURNS_REACHED") else 1
 
 

@@ -196,3 +196,44 @@ def test_batch_summary():
     results = [run_one(seed, max_turns=40) for seed in range(3)]
     s = summarise(results)
     assert s["runs"] == 3 and sum(s["outcomes"].values()) == 3
+
+
+def test_doctrine_changes_coordinator_behaviour():
+    a = Simulation(seed=3, doctrine="cautious")
+    b = Simulation(seed=3, doctrine="industrious")
+    assert a.coordinator.doctrine.move_threshold < b.coordinator.doctrine.move_threshold
+    a.run(max_turns=80, delay_ms=0)
+    b.run(max_turns=80, delay_ms=0)
+    assert a.history != b.history
+
+
+def test_export_and_report():
+    import json
+    from pars.report import build_report, score
+    sim = Simulation(seed=6)
+    sim.run(max_turns=30, delay_ms=0)
+    data = json.loads(json.dumps(sim.to_dict()))
+    assert data["turns"] == 30 and len(data["history"]) == 30
+    assert "Score:" in build_report(sim, sim.initial_genes)
+    assert score(sim) >= 0
+
+
+def test_restoration_outscores_any_loss():
+    from pars.report import score
+    win = Simulation(seed=1)
+    win.game_over_reason, win.turn = "RESTORATION", 299
+    loss = Simulation(seed=1)
+    for p in loss.tech_tree.projects.values():
+        p["completed"] = True
+    loss.game_over_reason, loss.turn = "EXTINCTION", 300
+    assert score(win) > score(loss)
+
+
+def test_main_headless_exports(tmp_path):
+    import json
+    import main
+    out = tmp_path / "run.json"
+    code = main.main(["--headless", "--seed", "2", "--max-turns", "25",
+                      "--report-every", "0", "--export", str(out)])
+    assert code == 0
+    assert json.loads(out.read_text())["turns"] == 25
