@@ -64,7 +64,7 @@ node pars/web/frontier-batch.js 40                                 # balance rep
 
 A second mode about *what you need to survive anywhere*. Survivors arrive somewhere hostile with a few tools, some seeds and a survival handbook, and work out day by day what to do next. One day is one tick; a game is one year.
 
-The world is a 3D diorama: a smooth heightmap with slope-aware rock and soil, a water surface that rises over low ground in a flood, a sky and fog that follow the weather (rain, snow, dust, ash, lightning), soft shadows, and survivors who walk to the tile they're working. Drag to orbit, scroll to zoom, click a tile or person to inspect it.
+The world is a 3D diorama: a smooth heightmap with slope-aware rock and soil, wind-swept grass (one instanced mesh, bent in the shader), a water surface that rises over low ground in a flood, a sky and fog that follow the weather (rain, snow, dust, ash, lightning), soft shadows, and survivors who walk to the tile they're working. While it plays, the sun crosses the sky once per day; at night there are stars and a moon, windows glow and grow lights stand out. The **Colony's model** view paints each spot with what the colony *believes* it is worth, from the model it built itself. Drag to orbit, scroll to zoom, click a tile or person to inspect it.
 
 | Scenario | Situation | What it teaches |
 |---|---|---|
@@ -89,6 +89,20 @@ The world is a 3D diorama: a smooth heightmap with slope-aware rock and soil, a 
 | Red Planet | 44% | 68% | 82% | 88% (0.6) |
 
 What this does and doesn't show: where the colony has evidence it is nearly always right, but within one year it only gets evidence for a handful of facts. A frost limit is only revealed by a frost below it, flood tolerance by a flood over the crop, and a well rate by several wells. The colony doesn't go looking for that evidence, so most of the improvement comes from carrying knowledge across lives. Two fixes came out of measuring this: yield lessons are only announced when the gap beats 2.5 standard errors (false salvage "lessons" fell from 66 to 3 over 60 games, precision 55% → 93%), and crops that wilt in floodwater now teach the colony, not only crops that die (before, the colony learned nothing in 7 of 12 River Rose games where beans were flooded and survived). A frost death still gives only a bound ("dies at −4 °C"), not the exact limit.
+
+**Learning in three loops.** Inspired by nested learning (several learning processes at different speeds) and double-loop learning (revising the model's assumptions, not just its numbers when errors persist):
+
+| Loop | Speed | What changes | How |
+|---|---|---|---|
+| 1 | every observation | the numbers in the model (yields, limits, rates) | running estimates, significance-gated lessons; prediction error ("surprise") is logged |
+| 2 | every 10 observations | **the model's structure**: which conditions an outcome depends on | for each stream (foraging, turbine output, harvests vs. expectation) try splitting by one more condition (ground, exact height, soil wetness, distance, season; cover, irrigation, planting season, soil richness); adopt it only if it wins on BIC *and* predicts better on held-out halves of the data; small groups are shrunk toward the mean |
+| 3 | across lives | **how it learns**: evidence needed to revise, curiosity, trust in small samples (plus the decision weights) | cross-entropy search with the confirmation check below |
+
+What loop 2 found, on its own (no slot for it was written): foraging depends on ground type. Colonies in sandy places discover it in 12–15 of 16 games (sand ≈ 0.46 of the handbook vs. grass ≈ 0.89; the hidden truth is half) and stop foraging on sand (38% → 10% of trips in After the Wave, 31% → 21% in Dry Country). Getting there exposed learner bugs worth knowing about: logging every turbine every day gave the model a two-week memory, and the changing turbine mix looked like a seasonal effect (a false "season" discovery in all 16 Mars games; one turbine sampled every other day fixed it, 3/16). Coarse height bands also let season act as a proxy until exact height was used. Its limits are measurable too: Mars turbine output is so noisy (storms) that height is detectable in only ~1 of 10 games' worth of data, even with robust tests. Outcomes vs. without loop 2: +1.4 ± 1.4 (within noise).
+
+Other options explored:
+- **Curiosity** (try conditions with little evidence): for turbine siting it did not produce the hoped-for discoveries on Mars, but it measurably helped Mars colonies (+6.9 ± 2.5 over 300 paired games; perished 55 → 39). They build fewer turbines (21 vs. 25) at similar heights, so the gain appears to come from freed wire, scrap and labour, not from learning.
+- **Skeptical knowledge transfer** (`transfer: "skeptical"`): disaster lessons inherited from other lives stay dormant until that disaster strikes here. It edges out naive transfer (+0.6 ± 0.7, not significant), so it is an option rather than the default.
 
 **Disasters.** Ten kinds, each with its own mechanics, a handbook response and, for most, a lesson the colony can only learn by living through it:
 
