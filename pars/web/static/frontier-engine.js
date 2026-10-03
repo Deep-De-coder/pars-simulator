@@ -991,7 +991,10 @@
           const M = this.models.turbine;
           if (id === "wind_turbine" && this.learnStructure && M.split.length && M.obs.length >= 20)
             return near(T.filter((t) => this.freeLand(t)), (t) => 3 * M.predict({ ...this.tileCtx(t), season: this.season }, this.brain.shrink).m);
-          return near(T.filter((t) => this.freeLand(t)), (t) => t.elev * 2.5);
+          // curiosity: until we've learned what matters, an experiment at a
+          // height we have little evidence about is worth a little output
+          const probe = id === "wind_turbine" && this.learnStructure && this.brain.curiosity > 0 && this.tiles.filter((t) => t.structure && t.structure.type === "wind_turbine").length >= 2;
+          return near(T.filter((t) => this.freeLand(t)), (t) => t.elev * 2.5 + (probe ? this.brain.curiosity * 8 / Math.sqrt(1 + M.count("height", `h${t.elev}`)) : 0));
         }
         case "riverbank": return near(T.filter((t) => this.freeLand(t) && this.neighbors(t).some((n) => n.type === "river")));
         case "ice": return near(T.filter((t) => t.type === "ice" && !t.structure && !this.reserved(t)));
