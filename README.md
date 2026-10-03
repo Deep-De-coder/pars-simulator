@@ -112,7 +112,7 @@ Set how often they strike (calm, normal, frequent, relentless) or **unleash** an
 - `node pars/web/static/frontier-train.js` (parallel, about 30 minutes) builds the *Pre-trained veteran* in `frontier-brain.js`:
   1. It lives 60 simulated years across all five places, each year inheriting the last one's knowledge.
   2. For each place, it tests every piece of knowledge on its own against the novice, on the same validation games, and keeps a piece only with solid evidence (at least 2 standard errors).
-  3. For each place, it searches the colony's 22 decision weights with a cross-entropy method. Candidates are scored by their advantage over the defaults on identical games, and the result is kept only if it beats the defaults on separate validation games (again at 2 standard errors).
+  3. For each place, it searches the colony's 25 decision weights (including three that control how the colony learns) with a cross-entropy method. Candidates are scored by their advantage over the defaults on identical games, and the result is kept only if it beats the defaults on separate validation games (again at 2 standard errors).
   4. Each place's chosen bundle is then compared with the novice **once** on 60 games that played no part in choosing it, and kept only if it wins by 2 standard errors there.
   5. It reports results on fresh seeds that played no part in any of those choices.
 

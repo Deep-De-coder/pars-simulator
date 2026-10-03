@@ -1365,7 +1365,7 @@ function renderTrain(s) {
     $("pre-summary").dataset.done = "1";
   }
   const b = s.brain;
-  const LBL = { safety: "Safety", warmth: "Shelter", fuel: "Firewood", water: "Water now", waterSource: "Water source", food: "Food now", farming: "Farming", power: "Power", growth: "Growth", crisisDamp: "Crisis focus", fieldsMult: "Fields", woodStock: "Wood kept", scrapStock: "Scrap kept", fireResponse: "Firefighting", repair: "Repairs", boilBias: "Boil water", coverPatch: "Patch greenhouses", coverBrace: "Brace greenhouses", coverGain: "Greenhouse value", waterCare: "Watering to need", frostCover: "Frost covers", storage: "Batteries" };
+  const LBL = { safety: "Safety", warmth: "Shelter", fuel: "Firewood", water: "Water now", waterSource: "Water source", food: "Food now", farming: "Farming", power: "Power", growth: "Growth", crisisDamp: "Crisis focus", fieldsMult: "Fields", woodStock: "Wood kept", scrapStock: "Scrap kept", fireResponse: "Firefighting", repair: "Repairs", boilBias: "Boil water", coverPatch: "Patch greenhouses", coverBrace: "Brace greenhouses", coverGain: "Greenhouse value", waterCare: "Watering to need", frostCover: "Frost covers", storage: "Batteries", reviseBIC: "Evidence to revise model", curiosity: "Curiosity", shrink: "Trust in small samples" };
   $("brain-view").innerHTML = Object.entries(LBL).map(([k, l]) => `<div><label>${l}</label><span class="num">${typeof b[k] === "number" ? (b[k] >= 10 ? b[k].toFixed(0) : b[k].toFixed(2)) : "-"}</span></div>`).join("");
 }
 let training = null;
