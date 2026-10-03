@@ -244,6 +244,10 @@
         <div id="accuracy" style="display:grid;gap:8px;font-size:12px"></div>
       </section>
       <section>
+        <h3>What we've worked out <em>our own model: which conditions matter</em></h3>
+        <div id="models" style="display:grid;gap:8px;font-size:12px"></div>
+      </section>
+      <section>
         <h3>Yield book <em>handbook guess vs. what work actually gave</em></h3>
         <div id="yieldbook" style="display:grid;gap:4px;font-size:12px"></div>
       </section>
@@ -1090,6 +1094,7 @@ function renderBook(s) {
     <div><b>Expected power</b><br><span class="muted">wind turbine ~${s.beliefs.power.wind_turbine}/day · solar panel ~${s.beliefs.power.solar_array}/day</span></div>
     ${[...s.beliefs.wellLearned, ...s.beliefs.powerLearned].map((l) => `<div style="color:var(--learn)">💡 ${esc(l)}</div>`).join("")}`;
   renderAccuracy(s);
+  renderModels(s);
   const T = s.techniques;
   $("techs").innerHTML = Object.entries(T).map(([id, t]) => {
     const req = Object.entries(t.requires).map(([k, v]) => `${v} ${k}`).join(", ") + (t.alt ? ` (or ${Object.entries(t.alt).map(([k, v]) => `${v} ${k}`).join(", ")})` : "") + (t.tools ? `, tools` : "") + (t.power ? ` · uses ${t.power} power/day` : "");
@@ -1100,6 +1105,19 @@ function renderBook(s) {
 }
 
 // The engine knows the truth the colony can't see; this compares the two.
+// Loop 2: the structure the colony has discovered for each outcome stream.
+function renderModels(s) {
+  const LBL = { ground: "ground", height: "height", moisture: "soil wetness", distance: "distance", season: "season", cover: "cover", irrigated: "irrigation", plantSeason: "planting season", soil: "soil" };
+  const rows = Object.values(s.models || {}).filter((m) => m.n > 0).map((m) => {
+    const split = m.split.length ? m.split.map((f) => `<b style="color:var(--learn)">${LBL[f] || f}</b>`).join(" + ") : `<span class="muted">nothing yet (one average fits)</span>`;
+    const groups = m.split.length ? `<div class="muted" style="margin-top:2px">${m.groups.map((g) => `${esc(g.key.replace(/\|/g, " · ").replace(/\bh(\d)/g, "height $1"))}: <b style="color:var(--ink)">${g.m}</b> <small>(${g.n})</small>`).join(" · ")}</div>` : "";
+    return `<div><div style="display:flex;justify-content:space-between"><b style="color:var(--ink)">${esc(m.label)}</b><span class="muted">${m.n} observations${m.surprise !== null ? ` · surprise ${m.surprise.toFixed(2)}` : ""}</span></div>
+      <div>depends on: ${split}</div>${groups}</div>`;
+  });
+  $("models").innerHTML = (rows.join("") || `<span class="muted">No observations yet.</span>`)
+    + (s.structureLearned || []).map((l) => `<div style="color:var(--learn)">🧭 ${esc(l)}</div>`).join("")
+    + `<div class="muted">Every few observations the colony checks whether splitting an outcome by one more condition explains its surprises clearly better (and still does on data it held back). If so it rebuilds its model around that condition and plans with it.</div>`;
+}
 function renderAccuracy(s) {
   const a = s.accuracy, log = [[0, s.startAccuracy], ...s.accuracyLog];
   const w = 300, h = 60, maxD = Math.max(30, log[log.length - 1][0]);

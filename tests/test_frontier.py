@@ -216,6 +216,42 @@ def test_fitting_a_structure_that_was_destroyed_mid_job_refunds_materials():
     """)
     assert res == {"wireBack": 2, "lights": False, "structure": None}
 
+
+def test_structure_learner_finds_the_real_context_and_ignores_a_decoy():
+    # Loop 2: outcomes depend on "ground" (sand gives half) but not on "colour";
+    # the learner should split on ground and not on colour.
+    res = run("""
+      const M = new F.StructModel("t", "Test", ["colour", "ground"]);
+      let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      const found = [];
+      for (let i = 0; i < 300; i++) {
+        const ground = r() < 0.4 ? "sand" : "grass", colour = r() < 0.5 ? "red" : "blue";
+        const y = (ground === "sand" ? 1 : 2) + (r() - 0.5);
+        const f = M.add(y, {ground, colour});
+        if (f) found.push(f);
+      }
+      const p = M.predict({ground: "sand", colour: "red"}).m, q = M.predict({ground: "grass", colour: "red"}).m;
+      console.log(JSON.stringify({found, sand: p, grass: q}));
+    """)
+    assert res["found"] == ["ground"], res
+    assert abs(res["sand"] - 1) < 0.2 and abs(res["grass"] - 2) < 0.2, res
+
+
+def test_colonies_learn_that_sand_is_poor_foraging_and_forage_elsewhere():
+    res = run("""
+      let on = 0, off = 0, found = 0;
+      for (let i = 0; i < 4; i++) for (const ls of [true, false]) {
+        const f = new F.Frontier({scenario: 'after_wave', seed: 76000 + i, learnStructure: ls});
+        let sand = 0, tot = 0; const og = f.doGather.bind(f);
+        f.doGather = (s, t, res, sk) => { if (res === 'forage') { tot++; if (t.type === 'sand') sand++; } return og(s, t, res, sk); };
+        while (f.running) f.tick();
+        if (ls) { on += sand / Math.max(1, tot); if (f.models.forage.split.includes('ground')) found++; } else off += sand / Math.max(1, tot);
+      }
+      console.log(JSON.stringify({on: on / 4, off: off / 4, found}));
+    """)
+    assert res["found"] >= 3, res
+    assert res["on"] < res["off"] * 0.6, res
+
 def test_facts_backed_by_evidence_are_mostly_right():
     # "Tested" facts are ones the colony had evidence for (a frost below the
     # limit, a flood over the crop, enough digs or catches). Those should be

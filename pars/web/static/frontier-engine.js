@@ -44,6 +44,9 @@
     waterCare: 0, // 0 = water only when parched (handbook); 1 = keep soil at the crop's need
     frostCover: 1, // how much to value covering plants when frost is forecast
     storage: 1, // how much to value batteries that carry good days into bad
+    reviseBIC: 6, // loop 2: how much better a split must explain outcomes before we rebuild the model
+    curiosity: 0.5, // loop 2: bonus for trying contexts we have little evidence about
+    shrink: 5, // loop 2: how many pseudo-observations pull a small group toward the overall mean
   };
 
   const YEAR = 360;
@@ -73,10 +76,116 @@
   }
 
   // ================================================================ world
+  // ---------------------------------------------------------------- loop 2
+  // Structure learning ("double-loop"): an outcome stream keeps its recent
+  // observations with their context. Loop 1 just predicts from the current
+  // structure. Loop 2 asks, every few observations, whether splitting the
+  // stream by one more context feature explains the errors much better than
+  // the current structure (BIC with a pooled-variance Gaussian per group),
+  // and if so rebuilds the model around it. Small groups are shrunk toward
+  // the overall mean, so a new split can't overfit a couple of samples.
+  class StructModel {
+    constructor(name, label, features, opts = {}) {
+      this.name = name; this.label = label; this.features = features;
+      this.split = []; this.obs = []; this.sinceRevise = 0;
+      this.maxObs = opts.maxObs || 400; this.maxSplit = opts.maxSplit || 2;
+      this.errs = []; // recent |prediction error| (for the surprise display)
+      this.revisions = [];
+      this.ver = 0; this.cache = new Map(); // stats are cached per version
+      this.counts = {}; // feature -> value -> number of observations (for curiosity)
+    }
+    count(f, v) { return (this.counts[f] && this.counts[f][v]) || 0; }
+    bump(ctx, d) { for (const f of this.features) { if (ctx[f] === undefined) continue; const c = this.counts[f] || (this.counts[f] = {}); c[ctx[f]] = (c[ctx[f]] || 0) + d; } }
+    key(ctx, split = this.split) { return split.map((f) => ctx[f]).join("|"); }
+    stats(split = this.split) {
+      const ck = "s:" + split.join(",");
+      const hit = this.cache.get(ck); if (hit && hit.ver === this.ver) return hit.v;
+      const g = new Map();
+      for (const o of this.obs) { const k = this.key(o.ctx, split); const e = g.get(k) || { n: 0, sum: 0, ss: 0 }; e.n++; e.sum += o.y; e.ss += o.y * o.y; g.set(k, e); }
+      this.cache.set(ck, { ver: this.ver, v: g });
+      return g;
+    }
+    pooled() {
+      const hit = this.cache.get("p"); if (hit && hit.ver === this.ver) return hit.v;
+      const v = this._pooled(); this.cache.set("p", { ver: this.ver, v }); return v;
+    }
+    _pooled() { const n = this.obs.length; if (!n) return { m: 0, n: 0, sd: 1 }; const m = this.obs.reduce((a, o) => a + o.y, 0) / n; const v = this.obs.reduce((a, o) => a + (o.y - m) ** 2, 0) / Math.max(1, n - 1); return { m, n, sd: Math.sqrt(v) || 0.01 }; }
+    predict(ctx, n0 = 5) {
+      const P = this.pooled();
+      if (!this.split.length) return { m: P.m, n: P.n, sd: P.sd };
+      const e = this.stats().get(this.key(ctx)) || { n: 0, sum: 0 };
+      return { m: (e.sum + n0 * P.m) / (e.n + n0), n: e.n, sd: P.sd };
+    }
+    // residual sum of squares and group count for a candidate structure
+    fit(split) {
+      let rss = 0, k = 0;
+      for (const e of this.stats(split).values()) { k++; rss += e.ss - (e.sum * e.sum) / e.n; }
+      return { rss: Math.max(rss, 1e-6), k };
+    }
+    add(y, ctx, minGroup = 4, threshold = 6) {
+      const pr = this.obs.length >= 5 ? this.predict(ctx).m : null;
+      if (pr !== null) { this.errs.push(Math.abs(y - pr)); if (this.errs.length > 60) this.errs.shift(); }
+      this.obs.push({ y, ctx }); this.bump(ctx, 1);
+      if (this.obs.length > this.maxObs) this.bump(this.obs.shift().ctx, -1);
+      this.ver++;
+      if (++this.sinceRevise >= 10) { this.sinceRevise = 0; return this.revise(minGroup, threshold); }
+      return null;
+    }
+    revise(minGroup, threshold) {
+      const n = this.obs.length;
+      if (n < 20 || this.split.length >= this.maxSplit) return null;
+      const bic = (f) => n * Math.log(f.rss / n) + f.k * Math.log(n);
+      const cur = bic(this.fit(this.split));
+      let best = null;
+      for (const feat of this.features) {
+        if (this.split.includes(feat)) continue;
+        const cand = [...this.split, feat];
+        const groups = [...this.stats(cand).values()];
+        if (groups.length < 2 || groups.some((g) => g.n < minGroup)) continue;
+        const gain = cur - bic(this.fit(cand));
+        // don't believe a new structure until it predicts better on data it
+        // wasn't fitted to: fit on even observations and test on odd, and the
+        // other way round; both must improve (a guard against proxies and
+        // against flukes from testing many features many times)
+        if (gain > threshold && this.holdsOut(cand) && (!best || gain > best.gain)) best = { feat, gain };
+      }
+      if (!best) return null;
+      this.split.push(best.feat);
+      this.revisions.push({ feat: best.feat, n, gain: Math.round(best.gain * 10) / 10 });
+      return best.feat;
+    }
+    holdsOut(cand, minGain = 0.03) {
+      const half = (par) => this.obs.filter((_, i) => i % 2 === par);
+      const err = (train, test, split) => {
+        const g = new Map(); let tot = 0;
+        for (const o of train) { const k = this.key(o.ctx, split); const e = g.get(k) || { n: 0, sum: 0 }; e.n++; e.sum += o.y; g.set(k, e); tot += o.y; }
+        const pm = tot / Math.max(1, train.length);
+        let se = 0;
+        for (const o of test) { const e = g.get(this.key(o.ctx, split)); const m = e ? (e.sum + 3 * pm) / (e.n + 3) : pm; se += (o.y - m) ** 2; }
+        return se;
+      };
+      for (const par of [0, 1]) {
+        const tr = half(par), te = half(1 - par);
+        const a = err(tr, te, this.split), b = err(tr, te, cand);
+        if (!(b < a * (1 - minGain))) return false;
+      }
+      return true;
+    }
+    groups() { return [...this.stats().entries()].map(([k, e]) => ({ key: k, n: e.n, m: e.sum / e.n })).sort((a, b) => b.m - a.m); }
+    surprise() { return this.errs.length ? this.errs.reduce((a, b) => a + b, 0) / this.errs.length : null; }
+  }
+
   class Frontier {
-    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true, learnPower = true } = {}) {
+    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true, learnPower = true, learnStructure = true } = {}) {
       this.learnYields = learnYields;
       this.learnPower = learnPower;
+      this.learnStructure = learnStructure;
+      // outcome streams whose structure the colony learns for itself (loop 2)
+      this.models = {
+        forage: new StructModel("forage", "Foraging", ["season", "ground", "height", "moisture", "distance"]),
+        turbine: new StructModel("turbine", "Wind turbine output", ["height", "ground", "season"]),
+        harvest: new StructModel("harvest", "Harvests vs. what we expected", ["cover", "irrigated", "plantSeason", "soil"]),
+      };
       if (!(hazards in HAZARD_LEVELS)) throw new Error(`Unknown hazard level ${hazards}`);
       this.hazards = hazards;
       this.hazardMult = HAZARD_LEVELS[hazards];
@@ -488,7 +597,7 @@
     produce() {
       const w = this.weather, dz = this.disaster && this.disaster.type;
       let power = 0, water = 0;
-      const outputs = [];
+      const outputs = [], turbines = [];
       for (const t of this.tiles) {
         const s = t.structure;
         if (!s || t.flood >= 2) continue;
@@ -496,10 +605,14 @@
         if (s.type === "well" && s.ok) water += dz === "drought" ? 3 : 6;
         if (s.type === "solar_still") water += 2 * w.sun;
         if (s.type === "water_wheel") { const p = 6 * (this.flow || 0); power += p; outputs.push(["water_wheel", p]); }
-        if (s.type === "wind_turbine") { const p = 6 * this.windAt(t); power += p; outputs.push(["wind_turbine", p]); }
+        if (s.type === "wind_turbine") { const p = 6 * this.windAt(t); power += p; outputs.push(["wind_turbine", p]); turbines.push([t, p]); }
         if (s.type === "solar_array") { const p = 5 * w.sun * (s.panels || 1); power += p; outputs.push(["solar_array", p / (s.panels || 1)]); }
         if (s.type === "biogas" && this.inv.compost >= 1) { this.inv.compost -= 1; power += 2; }
       }
+      // one turbine every other day, so the model's memory spans the seasons
+      // (logging every turbine daily filled it with two weeks of data and made
+      // the changing turbine mix look like a seasonal effect)
+      if (turbines.length && this.day % 2 === 0) { const [t, p] = turbines[this.R.randint(0, turbines.length - 1)]; this.observeCtx("turbine", p, { ...this.tileCtx(t), season: this.season }); }
       // learn real outputs of uncertain power sources
       for (const [type, out] of outputs) {
         const b = this.beliefs.tech[type];
@@ -550,6 +663,41 @@
     coldTonight() { return this.weather.temp < 10; }
 
     // ------------------------------------------------------------ crops
+    // ---- loop 1 / loop 2 plumbing
+    harvestCtx(t, cropId, fert = t.fert, plantSeason = this.season) {
+      return { cover: t.lights ? "lit" : t.greenhouse ? "glass" : "open", irrigated: t.irrigated ? "yes" : "no", plantSeason, soil: fert < 0.4 ? "poor" : fert < 0.7 ? "fair" : "rich", crop: cropId };
+    }
+    tileCtx(t) {
+      const d = this.dist(t, this.home);
+      return { ground: t.type, height: `h${t.elev}`, moisture: t.moist < 0.33 ? "dry" : t.moist < 0.66 ? "damp" : "wet", distance: d <= 3 ? "near" : d <= 6 ? "mid" : "far" };
+    }
+    observeCtx(name, y, ctx) {
+      if (!this.learnStructure) return;
+      const M = this.models[name];
+      const feat = M.add(y, ctx, 4, this.brain.reviseBIC);
+      if (!feat) return;
+      const LBL = { ground: "the kind of ground", height: "how high the ground is", moisture: "how wet the soil is", distance: "distance from home", season: "the season", cover: "cover (open, glass, lit)", irrigated: "irrigation", plantSeason: "the season it was planted", soil: "soil richness", crop: "the crop" };
+      const g = M.groups(), hi = g[0], lo = g[g.length - 1];
+      const fmt = (x) => (Math.abs(x) >= 10 ? x.toFixed(0) : x.toFixed(2));
+      const msg = `${M.label} depends on ${LBL[feat] || feat}: best ${hi.key.replace(/\|/g, ", ")} (~${fmt(hi.m)}), worst ${lo.key.replace(/\|/g, ", ")} (~${fmt(lo.m)}). We rebuilt our model around it.`;
+      (this.beliefs.structureLearned = this.beliefs.structureLearned || []).push(`Day ${this.day + 1}: ${msg}`);
+      this.note("learn", msg);
+    }
+    // how much better (or worse) this context is than the stream as a whole
+    relEffect(name, ctx) {
+      const M = this.models[name];
+      if (!this.learnStructure || !M.split.length || M.obs.length < 20) return 1;
+      const P = M.pooled(); if (Math.abs(P.m) < 1e-6) return 1;
+      return clamp(M.predict(ctx, this.brain.shrink).m / P.m, 0.4, 1.8);
+    }
+    // curiosity: a bonus for a context whose features we've rarely seen
+    curiosityBonus(name, ctx) {
+      const M = this.models[name];
+      if (!this.learnStructure || this.brain.curiosity <= 0) return 0;
+      let minCount = Infinity;
+      for (const f of M.features) { if (ctx[f] === undefined) continue; minCount = Math.min(minCount, M.count(f, ctx[f])); }
+      return minCount === Infinity ? 0 : this.brain.curiosity / Math.sqrt(1 + minCount);
+    }
     cropTemp(t, temp, cropId = t.crop && t.crop.type) {
       // straw or cloth over the plants holds a few degrees through a cold night
       let warmed = temp + (t.greenhouse ? 12 : (t.coveredUntil || -1) >= this.day ? 4 : 0);
@@ -668,6 +816,7 @@
       const expected = b.yield * crop.health * (0.5 + 0.5 * crop.fertAtPlant) * b.yieldFactor
         * (1 - t.contam * 0.8) * (1 - Math.max(0, t.salt - truth.saltTol) * 0.9);
       const ratio = food / Math.max(1, expected);
+      this.observeCtx("harvest", ratio, this.harvestCtx(t, crop.type, crop.fertAtPlant, crop.plantSeason));
       b.yieldFactor = clamp(b.yieldFactor + (ratio - 1) * 0.35 * b.yieldFactor, 0.2, 2);
       if (b.harvested === 1 && Math.abs(b.yieldFactor - 1) > 0.2) {
         this.learn(crop.type, `${truth.name} yields about ${Math.round(b.yieldFactor * 100)}% of what the handbook promised here.`);
@@ -819,7 +968,14 @@
       const safeElev = (t) => (this.sc.terrain.river ? (t.elev >= 2 ? 3 : t.elev * 1.2) : 0);
       switch (TECHNIQUES[id].site) {
         case "land": return near(T.filter((t) => this.freeLand(t) && t.type !== "forest"), safeElev);
-        case "high": return near(T.filter((t) => this.freeLand(t)), (t) => t.elev * 2.5);
+        case "high": {
+          // the handbook says high ground; once we've learned how turbine
+          // output really varies, site by our own model instead
+          const M = this.models.turbine;
+          if (id === "wind_turbine" && this.learnStructure && M.split.length && M.obs.length >= 20)
+            return near(T.filter((t) => this.freeLand(t)), (t) => 3 * M.predict({ ...this.tileCtx(t), season: this.season }, this.brain.shrink).m);
+          return near(T.filter((t) => this.freeLand(t)), (t) => t.elev * 2.5);
+        }
         case "riverbank": return near(T.filter((t) => this.freeLand(t) && this.neighbors(t).some((n) => n.type === "river")));
         case "ice": return near(T.filter((t) => t.type === "ice" && !t.structure && !this.reserved(t)));
         case "shelter": return near(T.filter((t) => t.structure && t.structure.type === "shelter" && !t.structure.heater && !this.reserved(t)));
@@ -906,7 +1062,7 @@
         const fertMult = 0.5 + 0.5 * t.fert;
         const saltMult = 1 - Math.max(0, t.salt - b.saltTol) * 0.9;
         const contamMult = 1 - t.contam * 0.8;
-        let expected = growth >= 1 ? b.yield * b.yieldFactor * fertMult * saltMult * contamMult : 0;
+        let expected = growth >= 1 ? b.yield * b.yieldFactor * fertMult * saltMult * contamMult * this.relEffect("harvest", this.harvestCtx(t, id)) : 0;
         if (!risk && growth < 1) risk = "won't ripen in time";
         if (b.remediates && t.contam > 0.2) expected += 15 * t.contam; // value of cleaning soil
         const floodRisk = this.sc.terrain.river && t.elev <= 1 && !t.raised && !b.flood;
@@ -1025,8 +1181,11 @@
         const foodScale = (y) => 3.5 * y / bestYield; // the best food job gets full weight
         const spots = this.tiles.filter((t) => ["forest", "marsh", "grass", "sand"].includes(t.type) && !t.field && t.flood === 0 && !this.reserved(t));
         if (spots.length) {
-          const t = spots.reduce((a, b) => (this.dist(b, this.home) < this.dist(a, this.home) ? b : a));
-          const fy = this.yieldEst(`forage_${season}`, 3 * wild);
+          // where to forage: our own model of what each spot gives (once we've
+          // learned what matters), plus curiosity about spots unlike any we've tried
+          const score = (x) => this.relEffect("forage", this.tileCtx(x)) + this.curiosityBonus("forage", this.tileCtx(x)) - 0.01 * this.dist(x, this.home);
+          const t = spots.reduce((a, b) => (score(b) > score(a) ? b : a));
+          const fy = this.yieldEst(`forage_${season}`, 3 * wild) * this.relEffect("forage", this.tileCtx(t));
           add({ label: `Forage wild food near (${t.x},${t.y})`, need: "food", value: u.food * foodScale(fy), why: `${A.foodDays.toFixed(0)} days of food left; expect ~${fy.toFixed(1)} a day`, task: { kind: "gather", res: "forage", x: t.x, y: t.y, work: 1 }, skill: "scavenging" });
         }
         const game = this.sc.game;
@@ -1497,6 +1656,7 @@
         const n = Math.round(base * skill * (t.type === "sand" ? 0.5 : 1)); // desert plants are sparse
         this.inv.food += n; this.gainFood(n);
         this.observeYield(`forage_${this.season}`, n / skill);
+        this.observeCtx("forage", (n / skill) / HANDBOOK_YIELDS[`forage_${this.season}`], this.tileCtx(t));
       }
       if (res === "hunt") { const [lo, hi] = this.sc.game.yield; const n = Math.round(this.R.randint(lo, hi) * skill); this.inv.food += n; this.gainFood(n); this.observeYield("hunt", n / skill); }
       if (res === "fish") { const n = Math.round(this.R.randint(0, 4) * skill * (t.type === "lake" ? 0.6 : 1)); this.inv.food += n; this.gainFood(n); this.observeYield(t.type === "lake" ? "fish_lake" : "fish_river", n / skill); }
@@ -1561,7 +1721,7 @@
       }
       if (task.kind === "plant") {
         if (!t.field || t.crop) { this.seeds[task.crop]++; return; } // seed was reserved at assignment
-        t.crop = { type: task.crop, growth: 0, health: 1, age: 0, planted: this.day, fertAtPlant: t.fert, contamAtPlant: t.contam, ripe: false };
+        t.crop = { type: task.crop, growth: 0, health: 1, age: 0, planted: this.day, plantSeason: this.season, fertAtPlant: t.fert, contamAtPlant: t.contam, ripe: false };
         if (this.disaster && this.disaster.type === "blight" && !t.greenhouse && this.R.chance(0.25)) t.crop.blight = true;
         this.beliefs.crops[task.crop].planted++;
         return;
@@ -1785,6 +1945,8 @@
       if (this.beliefs.tech.well.real) place.wellsReal = this.beliefs.tech.well.real.map((c) => ({ ...c }));
       place.power = { wind_turbine: this.beliefs.tech.wind_turbine.output, solar_array: this.beliefs.tech.solar_array.output };
       if (this.beliefs.powerPct !== undefined) place.powerPct = this.beliefs.powerPct;
+      // the structure we worked out, with a sample of the evidence behind it
+      place.models = Object.fromEntries(Object.entries(this.models).map(([k, M]) => [k, { split: M.split.slice(), obs: M.obs.slice(-80) }]));
       place.yields = Object.fromEntries(Object.entries(this.beliefs.yields).map(([k, b]) => [k, { m: b.m, n: Math.min(30, b.n), told: b.told }]));
 
       if (this.discoveries.silt) place.silt = true;
@@ -1813,6 +1975,12 @@
         if (place.power) { this.beliefs.tech.wind_turbine.output = place.power.wind_turbine; this.beliefs.tech.solar_array.output = place.power.solar_array; this.beliefs.tech.wind_turbine.samples = this.beliefs.tech.solar_array.samples = 25; }
         if (place.silt) this.discoveries.silt = true;
         if (place.powerPct !== undefined) this.beliefs.powerPct = place.powerPct;
+        if (place.models) for (const [k, m] of Object.entries(place.models)) {
+          const M = this.models[k]; if (!M) continue;
+          M.split = m.split.filter((f) => M.features.includes(f));
+          for (const o of m.obs || []) { M.obs.push(o); M.bump(o.ctx, 1); }
+          M.ver++;
+        }
         if (place.yields) for (const [k, y] of Object.entries(place.yields)) if (this.beliefs.yields[k]) Object.assign(this.beliefs.yields[k], y, { seen: y.told ? 99 : 0 });
 
       }
@@ -1907,6 +2075,8 @@
       startAccuracy: f.startAccuracy,
       yieldBook: Object.fromEntries(Object.entries(f.beliefs.yields).map(([k, b]) => [k, { label: YIELD_LABEL[k], belief: Math.round(b.m * 100) / 100, handbook: HANDBOOK_YIELDS[k], seen: b.seen || 0 }])),
       yieldLearned: f.beliefs.yieldLearned || [],
+      models: Object.fromEntries(Object.entries(f.models).map(([k, M]) => [k, { label: M.label, features: M.features, split: M.split.slice(), groups: M.groups().slice(0, 6).map((g) => ({ key: g.key, n: g.n, m: Math.round(g.m * 100) / 100 })), n: M.obs.length, surprise: M.surprise(), revisions: M.revisions.slice() }])),
+      structureLearned: f.beliefs.structureLearned || [],
       wellModel: f.beliefs.tech.well.model || null,
       hazardGuide: HAZARD_GUIDE,
       hazards: f.hazards,
@@ -1946,7 +2116,7 @@
     };
   }
 
-  const api = { Frontier, createFrontier, serialize, YEAR, DEFAULT_BRAIN };
+  const api = { Frontier, createFrontier, serialize, YEAR, DEFAULT_BRAIN, StructModel };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FRONTIER = api;
 })(typeof window !== "undefined" ? window : globalThis);
