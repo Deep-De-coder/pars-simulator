@@ -183,6 +183,7 @@
         <button data-overlay="moist">Moisture</button>
         <button data-overlay="hazard">Salt &amp; contamination</button>
         <button data-overlay="elev">Height</button>
+        <button data-overlay="model">Colony's model</button>
       </div>
       <div class="pill-group" role="group" aria-label="Colony priority">
         <span>Priority</span>
@@ -588,6 +589,7 @@ function buildWorld(s) {
   buildTerrain(s);
   buildWater(s);
   buildWeatherFx();
+  grass = null; grassKey = "";
   const span = Math.max(W, H);
   sun.shadow.camera.left = -span * 0.75; sun.shadow.camera.right = span * 0.75;
   sun.shadow.camera.top = span * 0.75; sun.shadow.camera.bottom = -span * 0.75;
@@ -689,7 +691,7 @@ function buildDeco(t, s) {
     add(g, G.box, 0xdff2fa, 0.92, 0.5, 0.92, 0, 0.26, 0, { transparent: true, opacity: 0.22, depthWrite: false, roughness: 0.1 }).castShadow = false;
     for (const [dx, dz] of [[-0.46, -0.46], [0.46, -0.46], [-0.46, 0.46], [0.46, 0.46]]) add(g, G.box, 0xd8d8d0, 0.03, 0.52, 0.03, dx, 0.26, dz);
     for (const dz of [-0.46, 0, 0.46]) add(g, G.box, 0xd8d8d0, 0.94, 0.03, 0.03, 0, 0.52, dz);
-    if (t.lights) { const l = add(g, G.box, 0xc07af0, 0.8, 0.02, 0.8, 0, 0.49, 0, { emissive: 0xa050f0, emissiveIntensity: 1.2 }); l.castShadow = false; }
+    if (t.lights) { const l = add(g, G.box, 0xc07af0, 0.8, 0.02, 0.8, 0, 0.49, 0, { emissive: 0xa050f0, emissiveIntensity: 1.2 }); l.castShadow = false; l.name = "growglow"; }
   }
   const st = t.structure;
   if (st) {
@@ -699,6 +701,7 @@ function buildDeco(t, s) {
       add(g, G.cyl, 0xb0b0b0, 0.96, 0.06, 0.96, 0, 0.03, 0);
       add(g, G.cyl, 0x9a9a9a, 0.26, 0.34, 0.26, 0.5, 0.15, 0).rotation.z = Math.PI / 2;
       add(g, G.cyl6, 0x8a8a8a, 0.02, 0.35, 0.02, -0.15, 0.5, 0.1);
+      for (const a of [0.6, 2.2, 3.9]) { const w = add(g, G.box, 0x3a3a40, 0.14, 0.08, 0.02, Math.sin(a) * 0.46, 0.3, Math.cos(a) * 0.46, { emissive: 0xffd28a, emissiveIntensity: 0 }); w.rotation.y = a; w.name = "window"; w.castShadow = false; }
     } else if (ty === "shelter") {
       const log = 0x8a5f3a;
       add(g, G.box, log, 0.66, 0.36, 0.52, 0, 0.18, 0);
@@ -706,6 +709,7 @@ function buildDeco(t, s) {
       const r1 = add(g, G.box, 0x4a3426, 0.74, 0.04, 0.36, 0, 0.47, 0.13); r1.rotation.x = 0.62;
       const r2 = add(g, G.box, 0x4a3426, 0.74, 0.04, 0.36, 0, 0.47, -0.13); r2.rotation.x = -0.62;
       add(g, G.box, 0x2a1e14, 0.14, 0.22, 0.02, 0.12, 0.11, 0.265);
+      for (const wx of [-0.17, 0.27]) { const w = add(g, G.box, 0x3a3026, 0.11, 0.1, 0.02, wx, 0.22, 0.268, { emissive: 0xffb050, emissiveIntensity: 0 }); w.name = "window"; w.castShadow = false; }
       add(g, G.box, 0x6a6a6a, 0.08, 0.26, 0.08, -0.22, 0.52, -0.1);
       if (st.heater) add(g, G.box, 0xffb060, 0.1, 0.08, 0.02, -0.15, 0.2, 0.265, { emissive: 0xff8a2a, emissiveIntensity: 1.2 });
     }
@@ -761,6 +765,60 @@ function buildDeco(t, s) {
   }
   return g;
 }
+// ---------------------------------------------------------------- grass
+// Thousands of tufts drawn as one instanced mesh; a few lines added to the
+// standard shader bend them with the wind, so they cost almost nothing.
+let grass = null, grassKey = "";
+const GRASS_PER = { grass: 11, marsh: 7, forest: 3, sand: 2 };
+function grassColor(s) {
+  const sea = s.season, sc = s.scenario.id;
+  if (s.weather.rain > 0 && s.weather.temp <= 0) return 0xdfe6e8;
+  if (sc === "ash_winter") return 0x7c8a5e;
+  if (sc === "dry_country") return 0xb0a060;
+  return sea === "Winter" ? 0x8a8a52 : sea === "Autumn" ? 0x9a9a48 : sea === "Summer" ? 0x6aa04a : 0x5fae48;
+}
+function syncGrass(s) {
+  if (s.scenario.sterile) { if (grass) { fxGroup.remove(grass); grass = null; } return; }
+  const spots = s.tiles.filter((t) => GRASS_PER[t.type] && !t.field && !t.structure && !t.greenhouse && t.flood === 0 && !(t.burning > 0));
+  const col = grassColor(s);
+  const key = col + ":" + spots.map((t) => t.x + "," + t.y).join(";");
+  if (key === grassKey) return;
+  grassKey = key;
+  if (grass) fxGroup.remove(grass);
+  const count = spots.reduce((a, t) => a + GRASS_PER[t.type], 0);
+  const geo = new THREE.ConeGeometry(0.035, 0.22, 3);
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = { value: 0 }; sh.uniforms.uWind = { value: 0.3 };
+    sh.vertexShader = "uniform float uTime; uniform float uWind;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+      #ifdef USE_INSTANCING
+        float ph = instanceMatrix[3].x * 1.7 + instanceMatrix[3].z * 1.3;
+      #else
+        float ph = 0.0;
+      #endif
+      float bend = (position.y + 0.11) * (0.35 + uWind * 1.6);
+      transformed.x += sin(uTime * 2.2 + ph) * bend * 0.28;
+      transformed.z += cos(uTime * 1.7 + ph) * bend * 0.14;`);
+    mat.userData.shader = sh;
+  };
+  grass = new THREE.InstancedMesh(geo, mat, Math.max(1, count));
+  grass.receiveShadow = true;
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), base = new THREE.Color(col), c = new THREE.Color();
+  let i = 0;
+  for (const t of spots) for (let k = 0; k < GRASS_PER[t.type]; k++) {
+    const u = t.x + (hash(t.x * 7 + k, t.y * 3) - 0.5) * 0.9, v = t.y + (hash(t.y * 5 + k, t.x * 11) - 0.5) * 0.9;
+    const sc = 0.7 + hash(k, t.x + t.y * 31) * 0.9;
+    e.set((hash(k, 3) - 0.5) * 0.3, hash(k, t.x) * 3, (hash(k, 4) - 0.5) * 0.3); q.setFromEuler(e);
+    m4.compose(new THREE.Vector3(u - (W - 1) / 2, heightAtUV(u, v) + 0.1 * sc, v - (H - 1) / 2), q, new THREE.Vector3(sc, sc * (t.type === "marsh" ? 1.5 : 1), sc));
+    grass.setMatrixAt(i, m4);
+    c.copy(base).offsetHSL((hash(k, t.y) - 0.5) * 0.04, 0, (hash(t.x, k) - 0.5) * 0.12);
+    if (t.type === "sand") c.lerp(new THREE.Color(0xb8a870), 0.5);
+    grass.setColorAt(i, c);
+    i++;
+  }
+  grass.count = i;
+  fxGroup.add(grass);
+}
 function syncDeco(s) {
   for (const t of s.tiles) {
     const key = `${t.x},${t.y}`, sig = tileSig(t);
@@ -779,6 +837,14 @@ function tileColor(t, s) {
   if (overlay === "moist") return lerpColor(0xc9a86a, 0x2f7fc4, t.moist);
   if (overlay === "hazard") return t.contam > 0.05 || t.salt > 0.05 ? lerpColor(0x3a4a3a, t.contam > t.salt ? 0xd0e040 : 0xf0f0f0, Math.max(t.contam, t.salt)) : new THREE.Color(0x2f3a33);
   if (overlay === "elev") return lerpColor(0x2a4a6a, 0xd8d0b0, t.elev / 4);
+  if (overlay === "model") {
+    // what the colony believes a day's foraging here gives, from its own
+    // learned model (1 = average spot); fields, water and ruins are dimmed
+    const sim = game && game.sim;
+    if (!sim || !["forest", "marsh", "grass", "sand"].includes(t.type) || t.field) return new THREE.Color(0x26302c);
+    const v = sim.relEffect("forage", sim.tileCtx(sim.tile(t.x, t.y)));
+    return v >= 1 ? lerpColor(0xd8c860, 0x3fbf5a, (v - 1) / 0.4) : lerpColor(0xc0403a, 0xd8c860, (v - 0.4) / 0.6);
+  }
   let c = new THREE.Color(PAL[t.type] || 0x777777);
   if (t.type === "field") c = lerpColor(0x5a3e28, 0x7a5636, t.fert);
   if (t.type === "grass" || t.type === "forest") c.lerp(new THREE.Color(0xb8a060), Math.max(0, 0.45 - t.moist) * 0.8); // dry grass yellows
@@ -794,6 +860,8 @@ const LEGENDS = {
   fert: () => `<b style="color:var(--ink)">Soil fertility</b><div class="ramp" style="background:linear-gradient(90deg,#4a3a2a,#3fa04a)"></div><div>poor → rich. Flood silt and compost raise it; hungry crops lower it.</div>`,
   moist: () => `<b style="color:var(--ink)">Soil moisture</b><div class="ramp" style="background:linear-gradient(90deg,#c9a86a,#2f7fc4)"></div><div>dry → wet. Crops stall in dry soil unless watered or irrigated.</div>`,
   hazard: () => `<b style="color:var(--ink)">Salt &amp; contamination</b><div><span style="color:#f0f0f0">■</span> salt (rain washes it out) · <span style="color:#d0e040">■</span> contamination (sunflowers clean it)</div>`,
+  model: () => { const m = state.models && state.models.forage; const learned = m && m.split.length;
+    return `<b style="color:var(--ink)">Colony's model</b><div class="ramp" style="background:linear-gradient(90deg,#c0403a,#d8c860,#3fbf5a)"></div><div>poor → average → rich: what the colony believes a day's foraging gives on each spot, from the model it built itself.</div><div class="muted">${learned ? `It has learned foraging depends on ${m.split.join(" + ")}.` : "It hasn't found anything that matters yet, so every spot looks the same."} The truth: sand gives half.</div>`; },
   elev: () => `<b style="color:var(--ink)">Height</b><div class="ramp" style="background:linear-gradient(90deg,#2a4a6a,#d8d0b0)"></div><div>low → high. Low ground floods but wells strike water there.</div>`,
 };
 
@@ -898,16 +966,15 @@ function setWeatherFx(s) {
   const key = mars ? (dz === "storm" ? "marsStorm" : "mars") : dz === "storm" ? "storm" : dz === "ashfall" ? "ash" : dz === "heatwave" ? "heat"
     : w.rain > 0 && w.temp <= 0 ? "snow" : w.rain > 0 || w.sun < 0.45 ? "overcast" : "clear";
   const [top, hor, gnd] = SKIES[key];
-  setSky(top, hor, gnd);
-  scene.fog.color.set(hor);
+  dayLook = { top, hor, gnd, key };
   const thick = key === "storm" || key === "marsStorm" || key === "ash" ? 1 : key === "overcast" || key === "snow" ? 0.5 : 0;
   scene.fog.near = orbit.radius * (1.7 - thick * 0.7); scene.fog.far = orbit.radius * (5 - thick * 2.4);
-  sun.intensity = 0.35 + 0.95 * w.sun;
+  dayLook.sunI = 0.35 + 0.95 * w.sun;
   sun.color.set(dz === "heatwave" ? 0xffd4a0 : dz === "ashfall" ? 0xc0b8a8 : mars ? 0xffd2b0 : 0xfff0d8);
-  hemi.color.set(hor); hemi.groundColor.set(gnd); hemi.intensity = 0.45 + 0.25 * (1 - w.sun);
+  hemi.groundColor.set(gnd); dayLook.hemiI = 0.45 + 0.25 * (1 - w.sun);
   const doy = s.dayOfYear % 360;
-  const elevAng = 0.55 + 0.35 * Math.sin(((doy - 45) / 360) * Math.PI * 2); // higher sun in summer
-  sun.position.set(Math.cos(0.9) * 30, 30 * Math.sin(elevAng) + 8, Math.sin(0.9) * 30 * Math.cos(elevAng));
+  dayLook.elevAng = 0.55 + 0.35 * Math.sin(((doy - 45) / 360) * Math.PI * 2); // higher sun in summer
+  applyDayNight(true);
   cloudCount = key === "clear" || key === "heat" ? 4 : key === "mars" ? 0 : key === "marsStorm" ? 0 : key === "overcast" || key === "snow" ? 10 : 14;
   cloudDark = key === "storm" ? 0.45 : key === "overcast" || key === "ash" ? 0.75 : 1;
   clouds.children.forEach((c, i) => { c.visible = i < cloudCount; c.children.forEach((m) => { m.material.color.setScalar(cloudDark); m.material.color.lerp(new THREE.Color(key === "ash" ? 0x8a847a : 0xffffff), 0.2); }); });
@@ -917,10 +984,66 @@ function setWeatherFx(s) {
     water.userData.level = waterLevel(s);
   }
 }
+// ---------------------------------------------------------------- day & night
+// While the simulation plays, the sun arcs across the sky once per day; at
+// night the sky darkens, stars and the moon come out, windows glow and grow
+// lights stand out. Paused, the clock holds where it is.
+let dayLook = { top: 0x3f7fc4, hor: 0xc8dce8, gnd: 0x6a6458, key: "clear", sunI: 1, hemiI: 0.6, elevAng: 0.7 };
+let dayPhase = 0.4, nightness = 0, lastSkyPhase = -1;
+const NIGHT = { top: 0x060a18, hor: 0x18223a, gnd: 0x0c0c10 };
+const stars = (() => {
+  const n = 900, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const u = hash(i, 11), v = hash(i, 12) * 0.95 + 0.05, th = u * Math.PI * 2, ph = Math.acos(v);
+    pos.set([170 * Math.sin(ph) * Math.cos(th), 170 * Math.cos(ph), 170 * Math.sin(ph) * Math.sin(th)], i * 3);
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const m = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 0.9, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false }));
+  m.renderOrder = -1; scene.add(m); return m;
+})();
+const moon = new THREE.Mesh(new THREE.SphereGeometry(4, 16, 12), new THREE.MeshBasicMaterial({ color: 0xf2efe0, fog: false, transparent: true, opacity: 0 }));
+scene.add(moon);
+const _c1 = new THREE.Color(), _c2 = new THREE.Color(), _c3 = new THREE.Color(), _dusk = new THREE.Color(0xf0904a);
+function applyDayNight(force) {
+  const up = Math.sin((dayPhase - 0.25) * Math.PI * 2); // +1 noon, -1 midnight
+  const day = Math.max(0, Math.min(1, (up + 0.12) / 0.4));
+  nightness = 1 - day;
+  const dusk = Math.max(0, 1 - Math.abs(up) / 0.28) * (dayLook.key === "clear" || dayLook.key === "heat" ? 1 : 0.4);
+  const ang = (dayPhase - 0.25) * Math.PI * 2;
+  // by day the light comes from the sun; by night the same light is a cool moon
+  const clearish = dayLook.key === "clear" || dayLook.key === "heat" || dayLook.key.startsWith("mars");
+  if (up > -0.05) {
+    sun.position.set(Math.cos(ang) * 32, Math.max(2, Math.sin(ang) * 30 * Math.sin(dayLook.elevAng) + 4), 12 * Math.cos(dayLook.elevAng) + 6);
+    sun.intensity = Math.max(dayLook.sunI * Math.pow(day, 1.3), 0.08);
+    sun.color.set(dayLook.key.startsWith("mars") ? 0xffd2b0 : 0xfff0d8).lerp(_dusk, dusk * 0.6);
+  } else {
+    sun.position.set(-Math.cos(ang) * 30, Math.max(6, -Math.sin(ang) * 26), -14);
+    sun.intensity = 0.32 * nightness * (clearish ? 1 : 0.6);
+    sun.color.set(0x9fb4e8);
+  }
+  hemi.intensity = 0.34 + (dayLook.hemiI - 0.34) * day;
+  moon.position.set(-Math.cos(ang) * 150, Math.max(-20, -Math.sin(ang) * 110), -60);
+  moon.material.opacity = nightness * (dayLook.key === "clear" || dayLook.key.startsWith("mars") ? 1 : 0.35);
+  stars.material.opacity = nightness * (dayLook.key === "clear" || dayLook.key.startsWith("mars") ? 0.9 : 0.15);
+  if (force || Math.abs(dayPhase - lastSkyPhase) > 0.004) {
+    lastSkyPhase = dayPhase;
+    _c1.set(dayLook.top).lerp(_c2.set(NIGHT.top), nightness);
+    _c3.set(dayLook.hor).lerp(_c2.set(NIGHT.hor), nightness).lerp(_dusk, dusk * 0.45);
+    _c2.set(dayLook.gnd).lerp(new THREE.Color(NIGHT.gnd), nightness);
+    setSky(_c1, _c3, _c2);
+    scene.fog.color.copy(_c3);
+    hemi.color.set(dayLook.hor).lerp(_c2.set(0x5a6c9c), nightness); // blue ambient at night
+    hemi.groundColor.set(dayLook.gnd).lerp(_c2.set(0x1a1c26), nightness);
+  }
+}
 let last = 0;
 function animate(t) {
   requestAnimationFrame(animate);
   const dt = Math.min(0.1, (t - last) / 1000); last = t;
+  // one sky cycle per simulated day while playing
+  if (playing) dayPhase = (dayPhase + dt * 1000 / Math.max(80, +$("speed").value)) % 1;
+  applyDayNight(false);
+  if (grass) { grass.material.userData.shader && (grass.material.userData.shader.uniforms.uTime.value = t / 1000, grass.material.userData.shader.uniforms.uWind.value = state ? state.weather.wind : 0.3); }
   if (fx.kind === "rain") {
     const n = Math.min(NP, fx.count);
     for (let i = 0; i < n; i++) {
@@ -965,6 +1088,8 @@ function animate(t) {
   decoGroup.traverse((o) => {
     if (o.name === "spin") { if (o.userData.axis === "z") o.rotation.z += dt * (1 + wind * 7); else o.rotation.x += dt * 1.6 * flow; }
     else if (o.name === "blink") o.visible = Math.floor(t / 600) % 2 === 0;
+    else if (o.name === "window") o.material.emissiveIntensity = nightness * 3.2;
+    else if (o.name === "growglow") o.material.emissiveIntensity = 1.2 + nightness * 1.6;
     else if (o.name === "flame") { o.userData.baseY = o.userData.baseY ?? o.scale.y; o.scale.y = o.userData.baseY * (0.75 + 0.35 * Math.sin(t * 0.012 + o.userData.phase)); }
     else if (o.name === "smoke") { o.userData.phase = (o.userData.phase + dt * 0.25) % 1; o.position.y = 0.6 + o.userData.phase * 1.6; o.material.opacity = 0.45 * (1 - o.userData.phase); }
   });
@@ -1051,7 +1176,7 @@ function render() {
 
   // 3D
   updateTerrainColors(s);
-  syncDeco(s); syncPeople(s); syncMarkers(s); setWeatherFx(s);
+  syncDeco(s); syncGrass(s); syncPeople(s); syncMarkers(s); setWeatherFx(s);
   $("legend").innerHTML = LEGENDS[overlay]();
   document.querySelectorAll("[data-priority]").forEach((b) => b.classList.toggle("on", b.dataset.priority === s.priority));
 
