@@ -175,11 +175,17 @@
     surprise() { return this.errs.length ? this.errs.reduce((a, b) => a + b, 0) / this.errs.length : null; }
   }
 
+  const LESSON_HAZARD = { boilWater: "outbreak", fireAware: "wildfire", quakeWait: "earthquake", mixCrops: "blight", ashFertile: "wildfire" };
+  const LESSON_NAME = { boilWater: "Boil drinking water", fireAware: "Keep firebreaks in dry weather", quakeWait: "Wait out aftershocks", mixCrops: "Mix crops against blight", ashFertile: "Ash is fertile" };
   class Frontier {
-    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true, learnPower = true, learnStructure = true } = {}) {
+    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true, learnPower = true, learnStructure = true, transfer = "trust" } = {}) {
       this.learnYields = learnYields;
       this.learnPower = learnPower;
       this.learnStructure = learnStructure;
+      // "skeptical": disaster lessons inherited from other lives start dormant
+      // and switch on only when that disaster actually shows up here
+      this.transfer = transfer;
+      this.dormant = {};
       // outcome streams whose structure the colony learns for itself (loop 2)
       this.models = {
         forage: new StructModel("forage", "Foraging", ["season", "ground", "height", "moisture", "distance"]),
@@ -362,6 +368,7 @@
         const o = this.sc.opening;
         this.disaster = { type: o.type, daysLeft: o.days, level: o.level || 2 };
         this.lived = { [o.type]: true };
+        this.wakeLessons(o.type);
         this.note("event", `${DISASTERS[o.type].name}: ${DISASTERS[o.type].desc}`);
       }
       this.dirtyWaterDay = -99;
@@ -471,6 +478,7 @@
       const d = DISASTERS[type];
       this.disaster = { type, daysLeft: this.R.randint(d.days[0], d.days[1]), level: this.R.randint(1, 3), forced, startDay: this.day };
       (this.lived = this.lived || {})[type] = true;
+      this.wakeLessons(type);
       this.note("event", `${d.name} begins: ${d.desc}`);
       if (type === "earthquake") this.quake(1);
       if (type === "wildfire") {
@@ -498,6 +506,15 @@
         if (n && this.day - this.dirtyWaterDay < 5 && !this.beliefs.hazard.boilWater) {
           this.hazardLesson("boilWater", "People fell sick days after we drank unboiled water. From now on we always boil it, even if it means chopping wood first.");
         }
+      }
+    }
+    // a dormant inherited lesson becomes active the first time its disaster
+    // strikes here: we act on it at once instead of learning it the hard way
+    wakeLessons(type) {
+      for (const key of Object.keys(this.dormant)) {
+        if (LESSON_HAZARD[key] !== type) continue;
+        delete this.dormant[key];
+        this.hazardLesson(key, `${LESSON_NAME[key]}: we'd learned this elsewhere and held off. Now it's happening here, so we act on it.`);
       }
     }
     hazardLesson(key, msg) {
@@ -1966,7 +1983,11 @@
         if (c.yieldFactor) b.yieldFactor = c.yieldFactor;
         b.learned = (c.learned || []).map((t) => `Inherited: ${t}`);
       }
-      for (const [key, v] of Object.entries(k.hazard || {})) if (key !== "learned" && v) this.beliefs.hazard[key] = true;
+      for (const [key, v] of Object.entries(k.hazard || {})) {
+        if (key === "learned" || !v) continue;
+        if (this.transfer === "skeptical" && LESSON_HAZARD[key]) this.dormant[key] = true;
+        else this.beliefs.hazard[key] = true;
+      }
       this.beliefs.hazard.learned = (k.hazard && k.hazard.learned || []).map((t) => `Inherited: ${t}`);
       const place = (k.places || {})[this.scenarioId];
       if (place) {

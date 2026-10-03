@@ -252,6 +252,21 @@ def test_colonies_learn_that_sand_is_poor_foraging_and_forage_elsewhere():
     assert res["found"] >= 3, res
     assert res["on"] < res["off"] * 0.6, res
 
+
+def test_skeptical_transfer_holds_inherited_lessons_until_the_disaster_strikes():
+    res = run("""
+      const k = {years: 3, crops: {}, hazard: {learned: [], boilWater: true, quakeWait: true}, places: {}};
+      const f = new F.Frontier({scenario: 'dry_country', seed: 3, knowledge: k, transfer: 'skeptical'});
+      const before = {boil: !!f.beliefs.hazard.boilWater, quake: !!f.beliefs.hazard.quakeWait};
+      f.startDisaster('earthquake', true);
+      const after = {boil: !!f.beliefs.hazard.boilWater, quake: !!f.beliefs.hazard.quakeWait};
+      const t = new F.Frontier({scenario: 'dry_country', seed: 3, knowledge: k});
+      console.log(JSON.stringify({before, after, trust: !!t.beliefs.hazard.boilWater}));
+    """)
+    assert res["before"] == {"boil": False, "quake": False}, res
+    assert res["after"] == {"boil": False, "quake": True}, res
+    assert res["trust"] is True, res
+
 def test_facts_backed_by_evidence_are_mostly_right():
     # "Tested" facts are ones the colony had evidence for (a frost below the
     # limit, a flood over the crop, enough digs or catches). Those should be
