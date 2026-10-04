@@ -46,7 +46,7 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E30 | (event + risk-averse planning) | ABORTED | run loaded a mid-edit engine; rerun only on a committed engine |
 | E34 | Synergy search, round 1: 10 switches, 2^(10-3) factorial (16,640 games) | NOTE | Mars: structure learning + curiosity weak alone on average, worth −11.7 / −10.0 when removed from shipped; greenhouse patch × brace substitute (−9.5); watering-to-need +9.6 on Mars, −8.5 on Dry |
 | E35 | Round 2: revived E16/E18/E19 as switches, 2^(8-2) factorial (8,320 games) + fresh A/Bs | REVERTED | compost reservation × soil-first +8.2 ± 4.7 in screen, fresh 200 Mars games −0.2 ± 3.7; food-lull −4.6 ± 1.3 on Earth again |
-| E36 | Watering to need, gated by context | IN PROGRESS | ungated: Mars +8.8 ± 3.6, Dry −12.8 ± 2.9; water-reserve gates can't separate them |
+| E36 | Watering to need × context gates (spare water + water income + covered crops) | KEPT (gate in engine; on for Mars veteran) | fresh: Mars novice +4.75 ± 2.29 / 400, Mars veteran +4.61 ± 2.64 / 300; Dry −3.8 ± 2.0 so novice default stays off |
 
 ## Details and "don't retry unless"
 
@@ -135,6 +135,23 @@ Outcomes vs. previous commit: Red Planet +4.07 ± 3.78 over 200 games (thriving 
 Reads: (1) the real synergy found is learning + acting on it: structure learning and curiosity are each near zero averaged over everything, but with storage, frost covers and power learning around them they are worth ~10 points each on Mars (replicated in E35: −15.6 ± 3.0). (2) Patch × brace = −9.5 ± 1.9: both prevent the same loss, so they substitute; patch × bigger farms −6.9 (more fields, fewer hands to patch). (3) Earth sits near the score cap; no pair passes 3 SE except watering × patch −0.9 ± 0.3. Bigger farms hurt Ash Winter −19.9 ± 7.1 (E12 replicated). *Caveat:* the analysis assumes no 3-way interactions.
 
 **E35 Round 2: failed ideas as switches.** Revived E18 (reserve compost at job start, `reserveCompost`), E19 (no fertilizer while sterile ground still lacks fields, `soilFirst`), E16 (stock food ahead while farms don't cover us, `lullPlan`), crossed with fieldsMult, learnStructure, storage, coverPatch, frostCover in a 2^(8-2) design (64 combinations; Mars 50 replicates, Earth 80). Hypothesis: E18 failed because reserved compost went to fertilizer, which E19 forbids, so the pair should fix each other. Screen: reserve × soilFirst +8.2 ± 4.7; best of 64 cells was exactly shipped + both. Fresh 200 Mars games (91000+): both −0.2 ± 3.7 (thriving 136 → 145, perished 39 → 51), reserve alone −2.4 ± 3.5, soilFirst alone +0.6 ± 4.0 (perished 39 → 48). Food-lull: Earth −4.6 ± 1.3, no partner rescues it; Mars exactly 0 (never triggers). *Lesson:* a screen's best cell is the winner's curse in pure form; only the fresh A/B counts. *Don't retry* the compost pair; soil-first trades deaths for thriving every time.
+
+**E36 Watering to need, gated.** E34 showed `waterCare` +9.6 on Mars, −8.5 on Dry Country (E11 had called the Mars gain noise: it was tested at 60 games). A/Bs, 200 games per place (seeds 91000+), all vs shipped:
+
+| Variant | Mars | Dry Country | Ash Winter |
+|---|---|---|---|
+| ungated | +8.79 ± 3.62 (perished 39 → 24) | −12.84 ± 2.85 (0 → 12) | |
+| spare water ≥ 6 days (gate 1) | +8.79 | −2.85 ± 1.87 | |
+| spare ≥ 12 / ≥ 20 days | +1.6 / −9.4 | −4.4 / −1.7 | |
+| idle-time only (gate 2) | +2.10 | −5.83 | |
+| gate 1 + 2 | +2.10 | −0.82 ± 1.62 | |
+| gate 1 + income covers drinking (5) | +8.79 | −2.29 | |
+| covered crops only (8) | +9.21 ± 3.59 | −3.74 | −0.36 |
+| 1 + 4 + 8 (13) | +9.21 | −1.57 ± 1.82 | −0.99 |
+
+Mechanism (Dry, 120 games): harvest goes up (948 → 992 per year) and drought crop deaths don't change; the loss is a tail of starvation years, not a steady drain. Comfort watering keeps the store just above the rescue cut-off, so the colony can't save parched crops in a bad spell; reserves help but a reserve strict enough for Dry kills Mars' gain (Mars runs on modest stores too).
+Fresh confirmation of gate 13 (seeds 92000+): **Mars +4.75 ± 2.29 / 400** (thriving 264 → 299, perished 58 → 55); River 0.0, Ash +2.3 ± 1.5, After the Wave −0.2, **Dry −3.79 ± 1.98** (third seed set negative: real, small). Mars veteran (shipped brain had waterCare 0.034; training missed it at 24 eval seeds) with waterCare 1 + gate, seeds 93000+: **+4.61 ± 2.64 / 300**, perished 54 → 40.
+Shipped: gate 13 is the engine default (`waterGate`, `waterSlack`; no effect while waterCare = 0, verified identical games); novice default waterCare stays 0; Mars veteran waterCare = 1 (edit recorded in `meta.edits`). *Lesson:* a technique that is +9 here and −13 there isn't "noise" or "bad"; it needs a context gate, and the gate's conditions only work combined (each alone left Dry at −3 to −6). *Next:* find what still costs Dry its tail years, then let training pick waterCare per place.
 
 ## Open questions worth testing next
 

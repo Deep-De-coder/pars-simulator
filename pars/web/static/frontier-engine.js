@@ -42,6 +42,8 @@
     coverPatch: 1, coverBrace: 1, // how much to follow the handbook's greenhouse advice
     coverGain: 1, // how much a greenhouse's expected extra food counts
     waterCare: 0, // 0 = water only when parched (handbook); 1 = keep soil at the crop's need
+    waterGate: 13, // when waterCare is on, limit it to: 1 = spare water, 2 = idle-time work, 4 = water income covers drinking, 8 = covered crops (bits; E36)
+    waterSlack: 6, // days of drinking water to keep before watering to need
     frostCover: 1, // how much to value covering plants when frost is forecast
     storage: 1, // how much to value batteries that carry good days into bad
     reviseBIC: 6, // loop 2: how much better a split must explain outcomes before we rebuild the model
@@ -1293,11 +1295,17 @@
         // How far above "parched" to keep the soil is a trained habit
         // (waterCare): worth it where water is cheap and plots are few, not
         // where it's hauled by hand; never when the forecast has rain.
-        const care = rainSoon ? 0 : Math.min(1, this.brain.waterCare);
+        // Watering to need pays on Mars (+4.7) but costs Dry Country colonies in
+        // bad years, so it only runs with water to spare, income covering
+        // drinking, and under covers (E36).
+        const wg = this.brain.waterGate | 0;
+        const slack = wg & 1 ? clamp((A.waterDays - (this.brain.waterSlack ?? 6)) / 14, 0, 1) * (wg & 4 && A.waterNet <= 0 ? 0 : 1) : 1;
+        const care = rainSoon || (wg & 8 && t.crop && !t.greenhouse) ? 0 : Math.min(1, this.brain.waterCare) * slack;
         const wantMoist = t.crop ? Math.max(0.25, 0.25 + (this.beliefs.crops[t.crop.type].water - 0.3) * care) : 0;
         if (t.crop && !t.irrigated && t.moist < wantMoist && CROPS[t.crop.type] && this.inv.water > A.pop * 2) {
           const slow = Math.min(1, (wantMoist - t.moist) * 1.6); // share of growth lost to dry soil
-          add({ label: `Water crops at (${t.x},${t.y})`, need: "food", value: 4 + t.crop.growth * 6 + slow * 10 * this.brain.waterCare, why: t.moist < 0.25 ? "soil is drying out" : `the ${this.beliefs.crops[t.crop.type].name.toLowerCase()} grows slower in soil this dry`, task: { kind: "water_crop", x: t.x, y: t.y, work: 1 }, skill: "farming" });
+          const parched = t.moist < 0.25;
+          add({ label: `Water crops at (${t.x},${t.y})`, need: "food", value: !parched && wg & 2 ? 0.5 + slow : 4 + t.crop.growth * 6 + slow * 10 * this.brain.waterCare * slack, why: t.moist < 0.25 ? "soil is drying out" : `the ${this.beliefs.crops[t.crop.type].name.toLowerCase()} grows slower in soil this dry`, task: { kind: "water_crop", x: t.x, y: t.y, work: 1 }, skill: "farming" });
         }
         if (!t.irrigated && (this.sc.climate.rain < 0.2 || t.crop && t.moist < 0.3) && this.siteForIrrigation(t)) {
           buildOption("irrigation", 18 * foodValue * (this.sc.climate.rain < 0.2 ? 1.6 : 1), "a channel from the water saves watering by hand every few days", t);

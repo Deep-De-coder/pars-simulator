@@ -317,3 +317,24 @@ def test_yield_book_learns_from_experience_and_wells_learn_a_rule():
     w = res["w"]
     assert w[0] > w[2] > w[4], w  # learned that higher ground is drier, including untested heights
     assert w[4] < 0.5
+
+
+def test_watering_to_need_stays_off_open_crops_and_dry_stores():
+    # E36: with the default gate, extra watering (beyond "parched") only goes
+    # to covered crops, and only while there is water to spare.
+    res = run("""
+      const extra = (gate) => {
+        let open = 0, covered = 0;
+        for (let seed = 1; seed <= 3; seed++) {
+          const f = new F.Frontier({scenario: 'dry_country', seed, brain: {...F.DEFAULT_BRAIN, waterCare: 1, waterGate: gate}});
+          const fin = f.finishTask.bind(f);
+          f.finishTask = (s, t, task) => { if (task.kind === 'water_crop' && t.moist >= 0.25) t.greenhouse ? covered++ : open++; return fin(s, t, task); };
+          while (f.running && f.day < 200) f.tick();
+        }
+        return {open, covered};
+      };
+      console.log(JSON.stringify({ungated: extra(0), gated: extra(F.DEFAULT_BRAIN.waterGate)}));
+    """)
+    assert res["ungated"]["open"] > 0
+    # a few rescue jobs planned while parched finish after the soil got wetter
+    assert res["gated"]["open"] < 0.03 * res["ungated"]["open"]
