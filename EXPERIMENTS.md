@@ -37,6 +37,8 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E25 | Skeptical knowledge transfer | OPTION (`transfer`) | +0.6 ± 0.7 vs naive, not significant |
 | E26 | Curiosity siting for turbines | KEPT | Mars +6.9 ± 2.5 / 300 games, but via fewer turbines, not learning |
 | E27 | Planning by imagination (switch strategy after imagining futures) | NOTE (no ship) | oracle + true score: Mars +28.8 ± 4.7; fair (no foresight): +1.0 ± 3.4 over 200 games |
+| E28 | Risk-averse (CVaR) planning | IN PROGRESS | 60 games +7.4 ± 6.2 (same as mean objective) |
+| E29 | Event-triggered planning (use the real 3-day forecast) | QUEUED | |
 
 ## Details and "don't retry unless"
 
@@ -80,7 +82,13 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 
 *Lessons:* (1) never trust a short-horizon hand-made value; it actively misled the oracle. (2) Of the oracle's +28.8, essentially all is foresight (knowing which disaster strikes when): planning with the true rules but an unknown future is worth ≈ +1 ± 3. A better forecaster, not a better planner, is where most of the value is. (3) Cost: to-year-end rollouts are ~30 colony-years of compute per game.
 
-*Don't retry* mean-objective strategy switching or distilling it (nothing to distill). Next: risk-averse objective (E28), since fair planning raised deaths.
+Earth places (fair, to year end, R=2, 16 games each): River Rose −5.50 ± 4.50, Ash Winter +5.94 ± 6.14, Dry Country −0.53 ± 4.89, After the Wave 0.00: nothing.
+
+*Don't retry* mean-objective strategy switching or distilling it (nothing to distill).
+
+**E28 Risk-averse planning (CVaR-50).** Same planner, but a strategy is judged by the mean of its worst half of R=4 imagined futures. Mars, 60 games: +7.41 ± 6.20, perished 10 → 11, about the same as the mean objective at 60 games (+7.15), which fell to +1 at 200. 200-game test: *running*.
+
+**E29 Event-triggered planning.** Re-plan when a disaster appears in the 3-day forecast or starts (imagined copies inherit that forecast, which is foresight the colony really has), plus a 60-day clock. *Queued.*
 
 ## Open questions worth testing next
 

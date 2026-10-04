@@ -26,13 +26,18 @@ function value(f, deathsBefore) {
   return ok * 4 + Math.min(14, f.alive.length) * 1.5 - (f.stats.deaths - deathsBefore) * 10 + Math.min(90, f.inv.food / pop) * 0.3 + (harvested / pop) * 0.5;
 }
 
-function playPlanned(opts, K, H, R, oracle = false, objective = "mean") {
+function playPlanned(opts, K, H, R, oracle = false, objective = "mean", trigger = "clock") {
   const f = new F.Frontier(opts);
   const base = { ...f.brain };
   const picks = {};
-  let decision = 0;
+  let decision = 0, lastEvent = "";
   while (f.running) {
-    if (f.day % K === 0) {
+    // "event": re-plan when a disaster shows up in the 3-day forecast or
+    // starts (the foresight a colony really has), plus a slow clock
+    const ev = (f.disaster ? "now:" + f.disaster.type : "") + "|" + f.forecast.map((w) => w.event || "").join(",");
+    const fresh = trigger === "event" && ev !== lastEvent && /[a-z]/.test(ev.replace(/now:|\|/g, ""));
+    lastEvent = ev;
+    if (f.day % K === 0 || fresh) {
       let best = null;
       for (const k of Object.keys(STRATEGIES)) {
         let v = 0; const vals = [];
@@ -57,15 +62,15 @@ function playPlanned(opts, K, H, R, oracle = false, objective = "mean") {
 }
 
 if (!wt.isMainThread) {
-  const { K, H, R, oracle, objective } = wt.workerData;
+  const { K, H, R, oracle, objective, trigger } = wt.workerData;
   wt.parentPort.on("message", ({ id, jobs }) => wt.parentPort.postMessage({ id, res: jobs.map((j) => {
-    if (j.planned) return playPlanned(j.opts, K, H, R, oracle, objective);
+    if (j.planned) return playPlanned(j.opts, K, H, R, oracle, objective, trigger);
     const f = T.playYear(j.opts); return { s: T.episodeScore(f), o: f.outcome };
   }) }));
   return;
 }
-const [N = 20, BASE = 82000, SCS = "red_planet", K = 20, H = 45, R = 2, ORACLE = "0", OBJ = "mean"] = process.argv.slice(2);
-const W = 4, ws = Array.from({ length: W }, () => new wt.Worker(__filename, { workerData: { K: +K, H: +H, R: +R, oracle: ORACLE === "1", objective: OBJ } }));
+const [N = 20, BASE = 82000, SCS = "red_planet", K = 20, H = 45, R = 2, ORACLE = "0", OBJ = "mean", TRIG = "clock"] = process.argv.slice(2);
+const W = 4, ws = Array.from({ length: W }, () => new wt.Worker(__filename, { workerData: { K: +K, H: +H, R: +R, oracle: ORACLE === "1", objective: OBJ, trigger: TRIG } }));
 let nid = 0; const pend = new Map(); ws.forEach((w) => w.on("message", ({ id, res }) => { pend.get(id)(res); pend.delete(id); }));
 const run = async (jobs) => { const out = new Array(jobs.length); await Promise.all(ws.map((w, k) => new Promise((res) => { const idx = jobs.map((_, i) => i).filter((i) => i % W === k); const id = nid++; pend.set(id, (r) => { r.forEach((x, j) => { out[idx[j]] = x; }); res(); }); w.postMessage({ id, jobs: idx.map((i) => jobs[i]) }); }))); return out; };
 (async () => {
