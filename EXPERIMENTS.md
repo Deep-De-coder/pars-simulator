@@ -44,6 +44,9 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E32 | LLM proposes features, statistics verify | BLOCKED | no model API access inside the container |
 | E33 | Why loop 2 can't learn Mars turbine height | KEPT | shared daily wind; compare turbines **within a day** → height found 16/16 (was 1/16); outcomes Mars +4.1 ± 3.8, Ash +2.8 ± 2.2 |
 | E30 | (event + risk-averse planning) | ABORTED | run loaded a mid-edit engine; rerun only on a committed engine |
+| E34 | Synergy search, round 1: 10 switches, 2^(10-3) factorial (16,640 games) | NOTE | Mars: structure learning + curiosity weak alone on average, worth −11.7 / −10.0 when removed from shipped; greenhouse patch × brace substitute (−9.5); watering-to-need +9.6 on Mars, −8.5 on Dry |
+| E35 | Round 2: revived E16/E18/E19 as switches, 2^(8-2) factorial (8,320 games) + fresh A/Bs | REVERTED | compost reservation × soil-first +8.2 ± 4.7 in screen, fresh 200 Mars games −0.2 ± 3.7; food-lull −4.6 ± 1.3 on Earth again |
+| E36 | Watering to need, gated by context | IN PROGRESS | ungated: Mars +8.8 ± 3.6, Dry −12.8 ± 2.9; water-reserve gates can't separate them |
 
 ## Details and "don't retry unless"
 
@@ -118,6 +121,20 @@ Caveats: learned ratios are shrunk toward 1 at the extremes (0.62 for a true 0.5
 Outcomes vs. previous commit: Red Planet +4.07 ± 3.78 over 200 games (thriving 131 → 143, perished 37 → 30); Ash Winter +2.76 ± 2.15 over 100 (thriving 82 → 87). Both positive, neither significant alone (pooled ≈ +3 ± 2): kept as not harmful, with a large learning gain.
 
 *Lesson:* when observations share a common cause, compare within the shared condition before testing structure. *Process lesson (E30):* never edit the engine while an experiment is running; workers load the file at start.
+
+**E34 Synergy search, round 1.** Question: which techniques only pay in combination? `experiments/factorial.js` turns 10 techniques into on/off switches (learnStructure, curiosity, frostCover, storage, waterCare, fieldsMult 0.9/1.25, coverPatch, coverBrace, learnYields, learnPower) and runs a 2^(10-3) resolution-V fractional factorial: 128 combinations, every combination on the same seeds (87000+), so main effects and all 45 pairwise interactions are estimated without aliasing each other. Interaction = points from having both on beyond the sum of each alone; flagged at 3 SE (45 pairs per place). Also reports "flip one switch from the shipped settings" (main effect + interactions at shipped levels, per-replicate SE). Mars 50 replicates (6,400 games), Earth 4 places × 20 (10,240).
+
+| Mars | average over all combinations | flipped from shipped |
+|---|---|---|
+| structure learning | +2.6 ± 1.8 | off: −11.7 ± 3.6 |
+| curiosity | +1.9 ± 1.1 | off: −10.0 ± 2.8 |
+| greenhouse patch | +11.7 ± 1.1 | off: −11.5 ± 2.9 |
+| watering to need | +9.6 ± 2.1 | on: +8.5 ± 4.3 |
+| bigger farms | +1.3 ± 1.6 | on: −5.0 ± 3.5 |
+
+Reads: (1) the real synergy found is learning + acting on it: structure learning and curiosity are each near zero averaged over everything, but with storage, frost covers and power learning around them they are worth ~10 points each on Mars (replicated in E35: −15.6 ± 3.0). (2) Patch × brace = −9.5 ± 1.9: both prevent the same loss, so they substitute; patch × bigger farms −6.9 (more fields, fewer hands to patch). (3) Earth sits near the score cap; no pair passes 3 SE except watering × patch −0.9 ± 0.3. Bigger farms hurt Ash Winter −19.9 ± 7.1 (E12 replicated). *Caveat:* the analysis assumes no 3-way interactions.
+
+**E35 Round 2: failed ideas as switches.** Revived E18 (reserve compost at job start, `reserveCompost`), E19 (no fertilizer while sterile ground still lacks fields, `soilFirst`), E16 (stock food ahead while farms don't cover us, `lullPlan`), crossed with fieldsMult, learnStructure, storage, coverPatch, frostCover in a 2^(8-2) design (64 combinations; Mars 50 replicates, Earth 80). Hypothesis: E18 failed because reserved compost went to fertilizer, which E19 forbids, so the pair should fix each other. Screen: reserve × soilFirst +8.2 ± 4.7; best of 64 cells was exactly shipped + both. Fresh 200 Mars games (91000+): both −0.2 ± 3.7 (thriving 136 → 145, perished 39 → 51), reserve alone −2.4 ± 3.5, soilFirst alone +0.6 ± 4.0 (perished 39 → 48). Food-lull: Earth −4.6 ± 1.3, no partner rescues it; Mars exactly 0 (never triggers). *Lesson:* a screen's best cell is the winner's curse in pure form; only the fresh A/B counts. *Don't retry* the compost pair; soil-first trades deaths for thriving every time.
 
 ## Open questions worth testing next
 
