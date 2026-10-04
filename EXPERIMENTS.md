@@ -37,7 +37,7 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E25 | Skeptical knowledge transfer | OPTION (`transfer`) | +0.6 ± 0.7 vs naive, not significant |
 | E26 | Curiosity siting for turbines | KEPT | Mars +6.9 ± 2.5 / 300 games, but via fewer turbines, not learning |
 | E27 | Planning by imagination (switch strategy after imagining futures) | NOTE (no ship) | oracle + true score: Mars +28.8 ± 4.7; fair (no foresight): +1.0 ± 3.4 over 200 games |
-| E28 | Risk-averse (CVaR) planning | IN PROGRESS | 200 games +6.2 ± 3.3, deaths unchanged (mean objective: +1.0, more deaths); confirming |
+| E28 | Risk-averse (CVaR) planning | REVERTED (never shipped) | 200 games +6.2 ± 3.3, then fresh 200: +1.9 ± 3.0, deaths 23 → 31 |
 | E29 | Event-triggered planning (use the real 3-day forecast) | NOTE | 60 games +10.3 ± 5.5 |
 | E30 | Event-triggered + risk-averse | QUEUED | |
 
@@ -87,7 +87,7 @@ Earth places (fair, to year end, R=2, 16 games each): River Rose −5.50 ± 4.50
 
 *Don't retry* mean-objective strategy switching or distilling it (nothing to distill).
 
-**E28 Risk-averse planning (CVaR-50).** Same planner, but a strategy is judged by the mean of its worst half of R=4 imagined futures. Mars, 60 games: +7.41 ± 6.20, perished 10 → 11, about the same as the mean objective at 60 games (+7.15), which fell to +1 at 200. 200-game test (seeds 83000+, the same seeds as E27's +1.0): **+6.24 ± 3.29, thriving 125 → 151, perished 33 → 33**: risk-aversion removed the gambling (mean objective: perished 33 → 42). Fresh-seed confirmation (84000+): *queued*.
+**E28 Risk-averse planning (CVaR-50).** Same planner, but a strategy is judged by the mean of its worst half of R=4 imagined futures. Mars, 60 games: +7.41 ± 6.20, perished 10 → 11, about the same as the mean objective at 60 games (+7.15), which fell to +1 at 200. 200-game test (seeds 83000+, the same seeds as E27's +1.0): **+6.24 ± 3.29, thriving 125 → 151, perished 33 → 33**: risk-aversion removed the gambling (mean objective: perished 33 → 42). Fresh-seed confirmation (84000+): **+1.87 ± 3.01, thriving 137 → 152, perished 23 → 31: not confirmed.** *Lesson:* even a clean-looking 200-game result at 1.9 SE can be luck; planning without foresight is consistently worth about +1 to +2 and trades deaths for thriving. *Don't retry* CVaR-50 strategy switching.
 
 **E29 Event-triggered planning.** Re-plan when a disaster appears in the 3-day forecast or starts (imagined copies inherit that forecast, which is foresight the colony really has), plus a 60-day clock. Mars, 60 games, mean objective, R=2: +10.26 ± 5.51, thriving 34 → 48, perished 10 → 11 (the clock planner on the same seeds: +6.89). Promising but 60 games has misled before.
 
