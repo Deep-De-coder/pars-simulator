@@ -179,13 +179,16 @@
   const LESSON_HAZARD = { boilWater: "outbreak", fireAware: "wildfire", quakeWait: "earthquake", mixCrops: "blight", ashFertile: "wildfire" };
   const LESSON_NAME = { boilWater: "Boil drinking water", fireAware: "Keep firebreaks in dry weather", quakeWait: "Wait out aftershocks", mixCrops: "Mix crops against blight", ashFertile: "Ash is fertile" };
   class Frontier {
-    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true, learnPower = true, learnStructure = true, transfer = "trust" } = {}) {
+    constructor({ scenario = "river_flood", seed = null, width = 16, height = 12, hazards = "normal", brain = null, knowledge = null, learnYields = true, learnPower = true, learnStructure = true, transfer = "trust", world = null } = {}) {
       this.learnYields = learnYields;
       this.learnPower = learnPower;
       this.learnStructure = learnStructure;
       // "skeptical": disaster lessons inherited from other lives start dormant
       // and switch on only when that disaster actually shows up here
       this.transfer = transfer;
+      // hidden-truth overrides for generated worlds (experiments): e.g.
+      // { sandForage: 1.4 } makes sand forage 1.4x grass instead of half
+      this.world = { sandForage: 0.5, ...(world || {}) };
       this.dormant = {};
       // outcome streams whose structure the colony learns for itself (loop 2)
       this.models = {
@@ -1697,7 +1700,7 @@
       }
       if (res === "forage") {
         const base = this.season === "Winter" ? 1 : this.season === "Autumn" ? 4 : 2.5;
-        const n = Math.round(base * skill * (t.type === "sand" ? 0.5 : 1)); // desert plants are sparse
+        const n = Math.round(base * skill * (t.type === "sand" ? this.world.sandForage : 1)); // desert plants are sparse (in this world)
         this.inv.food += n; this.gainFood(n);
         this.observeYield(`forage_${this.season}`, n / skill);
         this.observeCtx("forage", (n / skill) / HANDBOOK_YIELDS[`forage_${this.season}`], this.tileCtx(t));

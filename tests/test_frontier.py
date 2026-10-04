@@ -267,6 +267,20 @@ def test_skeptical_transfer_holds_inherited_lessons_until_the_disaster_strikes()
     assert res["after"] == {"boil": False, "quake": True}, res
     assert res["trust"] is True, res
 
+
+def test_structure_learning_follows_the_world_not_the_designer():
+    # In a generated world where sand is richer than grass, the colony should
+    # learn that and forage on sand more, the reverse of the default world.
+    res = run("""
+      const share = (w) => { let s = 0, t = 0;
+        for (let i = 0; i < 3; i++) { const f = new F.Frontier({scenario: 'after_wave', seed: 86000 + i, world: {sandForage: w}});
+          const og = f.doGather.bind(f); f.doGather = (p, tile, r, k) => { if (r === 'forage') { t++; if (tile.type === 'sand') s++; } return og(p, tile, r, k); };
+          while (f.running) f.tick(); }
+        return s / Math.max(1, t); };
+      console.log(JSON.stringify({poor: share(0.4), rich: share(1.6)}));
+    """)
+    assert res["rich"] > res["poor"] + 0.3, res
+
 def test_facts_backed_by_evidence_are_mostly_right():
     # "Tested" facts are ones the colony had evidence for (a frost below the
     # limit, a flood over the crop, enough digs or catches). Those should be

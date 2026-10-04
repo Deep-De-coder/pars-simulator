@@ -40,6 +40,8 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E28 | Risk-averse (CVaR) planning | REVERTED (never shipped) | 200 games +6.2 ± 3.3, then fresh 200: +1.9 ± 3.0, deaths 23 → 31 |
 | E29 | Event-triggered planning (use the real 3-day forecast) | NOTE | 60 games +10.3 ± 5.5 |
 | E30 | Event-triggered + risk-averse | QUEUED | |
+| E31 | Loop 2 in generated worlds (sand 0.3×–1.7× grass) | NOTE (validates E23) | learned ratio tracks truth: corr 0.88 / 0.82; sand trips 10% → 79% as sand gets richer |
+| E32 | LLM proposes features, statistics verify | BLOCKED | no model API access inside the container |
 
 ## Details and "don't retry unless"
 
@@ -92,6 +94,17 @@ Earth places (fair, to year end, R=2, 16 games each): River Rose −5.50 ± 4.50
 **E29 Event-triggered planning.** Re-plan when a disaster appears in the 3-day forecast or starts (imagined copies inherit that forecast, which is foresight the colony really has), plus a 60-day clock. Mars, 60 games, mean objective, R=2: +10.26 ± 5.51, thriving 34 → 48, perished 10 → 11 (the clock planner on the same seeds: +6.89). Promising but 60 games has misled before.
 
 **E30 Event-triggered + risk-averse (E28 + E29 merged).** R=4, CVaR-50, 200 fresh games (85000+). *Queued.*
+
+**E31 Generated worlds.** `world: { sandForage: x }` overrides the hidden truth. `experiments/world_shift.js`: 40 worlds with x from 0.3 to 1.7 (seeds 86000+), normal disasters.
+
+| Place | ground split adopted | corr(true, learned) | mean abs error (always-1 baseline) | sand trips: poor / even / rich |
+|---|---|---|---|---|
+| After the Wave | 30/40 | 0.88 | 0.12 (0.36) | 10% / 40% / 79% |
+| Dry Country | 29/40 | 0.82 | 0.14 (0.36) | 12% / 54% / 90% |
+
+Caveats: learned ratios are shrunk toward 1 at the extremes (0.62 for a true 0.50; 1.36–1.40 for 1.50), as the small-group shrinkage intends; in worlds where ground truly doesn't matter (0.7–1.3) a ground split is still adopted ~12/16 times, harmless (learned ≈ 1.00) but unnecessary structure. *Next:* vary more truths at once (crop limits, well curve, wind–height effect) and hold out whole worlds.
+
+**E32 LLM-proposed features.** Blocked here: no API key or SDK in the container. Needs an environment with model access.
 
 ## Open questions worth testing next
 
