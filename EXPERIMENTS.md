@@ -42,7 +42,7 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E30 | Event-triggered + risk-averse | QUEUED | |
 | E31 | Loop 2 in generated worlds (sand 0.3×–1.7× grass) | NOTE (validates E23) | learned ratio tracks truth: corr 0.88 / 0.82; sand trips 10% → 79% as sand gets richer |
 | E32 | LLM proposes features, statistics verify | BLOCKED | no model API access inside the container |
-| E33 | Why loop 2 can't learn Mars turbine height | FIXED (pending A/B) | not noise in general: shared daily wind; compare turbines **within a day** → height found 16/16 (was 1/16) |
+| E33 | Why loop 2 can't learn Mars turbine height | KEPT | shared daily wind; compare turbines **within a day** → height found 16/16 (was 1/16); outcomes Mars +4.1 ± 3.8, Ash +2.8 ± 2.2 |
 | E30 | (event + risk-averse planning) | ABORTED | run loaded a mid-edit engine; rerun only on a committed engine |
 
 ## Details and "don't retry unless"
@@ -114,6 +114,8 @@ Caveats: learned ratios are shrunk toward 1 at the extremes (0.62 for a true 0.5
 3. *Heavy-tailed storm outliers?* Log-scale tests: Mars 0–1/16. **Not it alone.**
 4. **Shared weather.** Output = daily wind × site factor, and every turbine shares the day's wind. Observing each turbine's output **relative to that day's average across turbines** (a paired comparison inside the agent's own learning, the same trick as our identical-seed A/B tests) → **height found 16/16 on Mars at the default effect**, Ash Winter 12/16.
 5. That made near-perfect fits, and BIC (log of residual variance) saw "evidence" in microscopic differences (ground split adopted with gain 31.5 while grass and sand at height 4 had identical values, 1.3013). A **noise floor** (outcomes never treated as measured better than 3%) cut false second splits 7 → 5 of 16; the rest look like a real confound (the day's average shifts as the turbine mix changes over the year). Forage world-shift test unaffected or better (corr 0.91).
+
+Outcomes vs. previous commit: Red Planet +4.07 ± 3.78 over 200 games (thriving 131 → 143, perished 37 → 30); Ash Winter +2.76 ± 2.15 over 100 (thriving 82 → 87). Both positive, neither significant alone (pooled ≈ +3 ± 2): kept as not harmful, with a large learning gain.
 
 *Lesson:* when observations share a common cause, compare within the shared condition before testing structure. *Process lesson (E30):* never edit the engine while an experiment is running; workers load the file at start.
 
