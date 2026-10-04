@@ -85,11 +85,15 @@
   // the current structure (BIC with a pooled-variance Gaussian per group),
   // and if so rebuilds the model around it. Small groups are shrunk toward
   // the overall mean, so a new split can't overfit a couple of samples.
+  const NOISE_FLOOR = 0.03;
   class StructModel {
     constructor(name, label, features, opts = {}) {
       this.name = name; this.label = label; this.features = features;
       this.split = []; this.obs = []; this.sinceRevise = 0;
       this.maxObs = opts.maxObs || 400; this.maxSplit = opts.maxSplit || 2;
+      // heavy-tailed streams (storm days) are judged on log scale, so a few
+      // extreme readings can't hide a real pattern; predictions stay in units
+      this.tf = opts.logTests ? (y) => Math.log1p(Math.max(0, y)) : (y) => y;
       this.errs = []; // recent |prediction error| (for the surprise display)
       this.revisions = [];
       this.ver = 0; this.cache = new Map(); // stats are cached per version
@@ -119,9 +123,14 @@
     }
     // residual sum of squares and group count for a candidate structure
     fit(split) {
-      let rss = 0, k = 0;
-      for (const e of this.stats(split).values()) { k++; rss += e.ss - (e.sum * e.sum) / e.n; }
-      return { rss: Math.max(rss, 1e-6), k };
+      const g = new Map();
+      for (const o of this.obs) { const k = this.key(o.ctx, split), y = this.tf(o.y); const e = g.get(k) || { n: 0, sum: 0, ss: 0 }; e.n++; e.sum += y; e.ss += y * y; g.set(k, e); }
+      let rss = 0, k = 0, n = 0;
+      for (const e of g.values()) { k++; n += e.n; rss += e.ss - (e.sum * e.sum) / e.n; }
+      // noise floor: never believe outcomes are measured better than ~3% (these
+      // streams are ratios near 1); near-perfect fits made BIC see "evidence"
+      // in microscopic differences once turbines were compared within a day
+      return { rss: Math.max(rss, n * NOISE_FLOOR ** 2), k };
     }
     add(y, ctx, minGroup = 4, threshold = 6) {
       const pr = this.obs.length >= 5 ? this.predict(ctx).m : null;
@@ -159,11 +168,11 @@
       const half = (par) => this.obs.filter((_, i) => i % 2 === par);
       const err = (train, test, split) => {
         const g = new Map(); let tot = 0;
-        for (const o of train) { const k = this.key(o.ctx, split); const e = g.get(k) || { n: 0, sum: 0 }; e.n++; e.sum += o.y; g.set(k, e); tot += o.y; }
+        for (const o of train) { const k = this.key(o.ctx, split), y = this.tf(o.y); const e = g.get(k) || { n: 0, sum: 0 }; e.n++; e.sum += y; g.set(k, e); tot += y; }
         const pm = tot / Math.max(1, train.length);
         let se = 0;
-        for (const o of test) { const e = g.get(this.key(o.ctx, split)); const m = e ? (e.sum + 3 * pm) / (e.n + 3) : pm; se += (o.y - m) ** 2; }
-        return se;
+        for (const o of test) { const e = g.get(this.key(o.ctx, split)); const m = e ? (e.sum + 3 * pm) / (e.n + 3) : pm; se += (this.tf(o.y) - m) ** 2; }
+        return se + test.length * NOISE_FLOOR ** 2;
       };
       for (const par of [0, 1]) {
         const tr = half(par), te = half(1 - par);
@@ -188,12 +197,12 @@
       this.transfer = transfer;
       // hidden-truth overrides for generated worlds (experiments): e.g.
       // { sandForage: 1.4 } makes sand forage 1.4x grass instead of half
-      this.world = { sandForage: 0.5, ...(world || {}) };
+      this.world = { sandForage: 0.5, windHeight: 0.2, ...(world || {}) };
       this.dormant = {};
       // outcome streams whose structure the colony learns for itself (loop 2)
       this.models = {
         forage: new StructModel("forage", "Foraging", ["season", "ground", "height", "moisture", "distance"]),
-        turbine: new StructModel("turbine", "Wind turbine output", ["height", "ground", "season"]),
+        turbine: new StructModel("turbine", "Wind turbine output (vs. the day's average)", ["height", "ground", "season"]),
         harvest: new StructModel("harvest", "Harvests vs. what we expected", ["cover", "irrigated", "plantSeason", "soil"]),
       };
       if (!(hazards in HAZARD_LEVELS)) throw new Error(`Unknown hazard level ${hazards}`);
@@ -614,7 +623,7 @@
     }
 
     // ------------------------------------------------------------ production
-    windAt(t) { return this.weather.wind * (0.45 + 0.2 * t.elev); } // truth: valleys are sheltered
+    windAt(t) { return this.weather.wind * (0.45 + this.world.windHeight * t.elev); } // truth: valleys are sheltered
     produce() {
       const w = this.weather, dz = this.disaster && this.disaster.type;
       let power = 0, water = 0;
@@ -630,10 +639,15 @@
         if (s.type === "solar_array") { const p = 5 * w.sun * (s.panels || 1); power += p; outputs.push(["solar_array", p / (s.panels || 1)]); }
         if (s.type === "biogas" && this.inv.compost >= 1) { this.inv.compost -= 1; power += 2; }
       }
-      // one turbine every other day, so the model's memory spans the seasons
-      // (logging every turbine daily filled it with two weeks of data and made
-      // the changing turbine mix look like a seasonal effect)
-      if (turbines.length && this.day % 2 === 0) { const [t, p] = turbines[this.R.randint(0, turbines.length - 1)]; this.observeCtx("turbine", p, { ...this.tileCtx(t), season: this.season }); }
+      // Compare turbines with each other on the same day: they all share that
+      // day's wind, so each one's output relative to the day's average
+      // cancels the weather and leaves what's really different about its
+      // site (a paired comparison, like testing changes on identical seeds).
+      // Every third day, so the memory still spans weeks.
+      if (turbines.length >= 2 && this.day % 3 === 0) {
+        const avg = turbines.reduce((a, [, p]) => a + p, 0) / turbines.length;
+        if (avg > 0.05) for (const [t, p] of turbines) this.observeCtx("turbine", p / avg, { ...this.tileCtx(t), season: this.season });
+      }
       // learn real outputs of uncertain power sources
       for (const [type, out] of outputs) {
         const b = this.beliefs.tech[type];
