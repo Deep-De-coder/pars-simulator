@@ -8,10 +8,13 @@
 const path = require("path");
 const fs = require("fs");
 const wt = require("worker_threads");
-const ENGINE_DIR = path.join(__dirname, "../pars/web/static");
+// ENGINE_DIR lets a candidate engine copy be screened without touching the repo's.
+const ENGINE_DIR = process.env.ENGINE_DIR || path.join(__dirname, "../pars/web/static");
+const SET = process.env.FACTOR_SET || "r1";
 
 // Each factor: [low, high] settings, applied as Frontier options or brain overrides.
-const FACTORS = [
+const SETS = {};
+SETS.r1 = [
   { k: "A", name: "learnStructure", opt: "learnStructure", lo: false, hi: true },
   { k: "B", name: "curiosity", brain: "curiosity", lo: 0, hi: 0.5 },
   { k: "C", name: "frostCover", brain: "frostCover", lo: 0, hi: 1 },
@@ -23,13 +26,28 @@ const FACTORS = [
   { k: "J", name: "learnYields", opt: "learnYields", lo: false, hi: true },
   { k: "K", name: "learnPower", opt: "learnPower", lo: false, hi: true },
 ];
+// Round 2: three ideas that failed alone (E16, E18, E19) crossed with the
+// switches most likely to change what they do.
+SETS.r2 = [
+  { k: "A", name: "reserveCompost", brain: "reserveCompost", lo: 0, hi: 1 },
+  { k: "B", name: "soilFirst", brain: "soilFirst", lo: 0, hi: 1 },
+  { k: "C", name: "lullPlan", brain: "lullPlan", lo: 0, hi: 1 },
+  { k: "D", name: "fieldsMult", brain: "fieldsMult", lo: 0.9, hi: 1.25 },
+  { k: "E", name: "learnStructure", opt: "learnStructure", lo: false, hi: true },
+  { k: "F", name: "storage", brain: "storage", lo: 0, hi: 1 },
+  { k: "G", name: "coverPatch", brain: "coverPatch", lo: 0, hi: 1 },
+  { k: "H", name: "frostCover", brain: "frostCover", lo: 0, hi: 1 },
+];
+const FACTORS = SETS[SET];
+// Base factors in full, the rest generated as products (resolution V).
+const DESIGNS = { r1: { nb: 7, gens: [[0, 1, 2, 3, 4], [0, 1, 2, 5, 6], [0, 3, 5, 6]] }, r2: { nb: 6, gens: [[0, 1, 2, 3], [0, 1, 4, 5]] } };
 
-// 2^(10-3) design, 128 runs: 7 base factors in full, 3 generated as products.
+// Round 1 is a 2^(10-3) design (128 runs), round 2 a 2^(8-2) design (64 runs).
 // Generators chosen so the defining relation has no word shorter than 5
 // (resolution V): main effects and two-way interactions are not aliased with
 // each other or with any other main effect / two-way interaction.
 function design() {
-  const nb = 7, gens = [[0, 1, 2, 3, 4], [0, 1, 2, 5, 6], [0, 3, 5, 6]];
+  const { nb, gens } = DESIGNS[SET];
   // Validate resolution: every product of a non-empty subset of generator words must have length >= 5.
   const words = gens.map((g, i) => new Set([...g, nb + i]));
   for (let m = 1; m < 1 << words.length; m++) {
@@ -45,6 +63,9 @@ function design() {
   }
   return runs;
 }
+
+// Shipped (novice) settings, to read effects from where we are now.
+const SHIPPED = { learnStructure: true, curiosity: 0.5, frostCover: 1, storage: 1, waterCare: 0, fieldsMult: 0.9, coverPatch: 1, coverBrace: 1, learnYields: true, learnPower: true, reserveCompost: 0, soilFirst: 0, lullPlan: 0 };
 
 function optsFor(x) {
   const o = { brain: {} };
@@ -101,10 +122,11 @@ if (mode === "run") {
     // Each (scenario, hazard, seed) block played every design run: one full replicate.
     const blocks = new Map();
     for (const r of rs) { const b = `${r.scenario}|${r.hazards}|${r.seed}`; if (!blocks.has(b)) blocks.set(b, []); blocks.get(b).push(r); }
-    const full = [...blocks.values()].filter((b) => b.length === 128);
+    const nRuns = Math.max(...[...blocks.values()].map((b) => b.length));
+    const full = [...blocks.values()].filter((b) => b.length === nRuns);
     if (full.length < 2) { console.log(`${sc}: only ${full.length} complete replicates`); continue; }
     const contrast = (fn) => full.map((b) => m(b.filter((r) => fn(r.x) > 0).map((r) => r.s)) - m(b.filter((r) => fn(r.x) < 0).map((r) => r.s)));
-    console.log(`\n=== ${sc}: ${full.length} replicates × 128 combinations (${full.length * 128} games) ===`);
+    console.log(`\n=== ${sc}: ${full.length} replicates × ${nRuns} combinations (${full.length * nRuns} games) ===`);
     console.log(`mean score ${m(full.flat().map((r) => r.s)).toFixed(1)}`);
     const main = factors.map((f, i) => { const c = contrast((x) => x[i]); return { f, eff: m(c), se: se(c) }; });
     console.log("Main effects (switch on − off, averaged over everything else):");
@@ -127,6 +149,20 @@ if (mode === "run") {
     const cell = new Map();
     for (const r of full.flat()) { if (!cell.has(r.r)) cell.set(r.r, { x: r.x, s: [] }); cell.get(r.r).s.push(r.s); }
     const top = [...cell.values()].map((c) => ({ ...c, mean: m(c.s) })).sort((a, b) => b.mean - a.mean).slice(0, 3);
+    // What flipping each switch does starting from the shipped settings: the
+    // main effect plus each interaction at the partner's shipped level
+    // (computed per replicate, so the error bar is honest).
+    const shipped = factors.map((f) => (SHIPPED[f.name] === f.hi ? 1 : -1));
+    console.log("Flipping one switch from the shipped settings (" + factors.map((f, i) => (shipped[i] > 0 ? f.k : f.k.toLowerCase())).join("") + "):");
+    for (let i = 0; i < factors.length; i++) {
+      const per = full.map((b) => {
+        const c = (fn) => m(b.filter((r) => fn(r.x) > 0).map((r) => r.s)) - m(b.filter((r) => fn(r.x) < 0).map((r) => r.s));
+        let e = c((x) => x[i]);
+        for (let j = 0; j < factors.length; j++) if (j !== i) e += c((x) => x[i] * x[j]) * shipped[j];
+        return e * -shipped[i]; // positive = changing it from the shipped level helps
+      });
+      console.log(`  ${shipped[i] > 0 ? "turn off" : "turn on "} ${factors[i].name.padEnd(15)} ${m(per).toFixed(2).padStart(6)} ± ${se(per).toFixed(2)}${Math.abs(m(per)) > 2 * se(per) ? "  *" : ""}`);
+    }
     console.log("Best 3 combinations (raw; winner's-curse inflated, confirm on fresh seeds):");
     for (const c of top) console.log(`  ${c.mean.toFixed(1)}  ` + factors.map((f, i) => (c.x[i] > 0 ? f.k : f.k.toLowerCase())).join(""));
   }
