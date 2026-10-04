@@ -45,7 +45,7 @@ function playPlanned(opts, K, H, R, oracle = false, objective = "mean", trigger 
           const c = f.imagine(opts.seed * 7919 + decision * 101 + r * 13 + 1, oracle);
           c.brain = withStrategy(base, k);
           const d0 = c.stats.deaths;
-          if (H > 0) { for (let d = 0; d < H && c.running; d++) c.tick(); v += value(c, d0) / R; }
+          if (H > 0) { for (let d = 0; d < H && c.running; d++) c.tick(); const x = value(c, d0); v += x / R; vals.push(x); }
           else { while (c.running) c.tick(); const sc = T.episodeScore(c); v += sc / R; vals.push(sc); } // H = 0: imagine to year end, true score
         }
         // risk-averse: judge a strategy by the mean of its worst half of imagined futures (CVaR-50)
