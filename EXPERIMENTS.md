@@ -36,7 +36,7 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E24 | Loop 3: train how the colony learns | NOTE | pick didn't beat shipped veteran (−2.8 ± 3.5) |
 | E25 | Skeptical knowledge transfer | OPTION (`transfer`) | +0.6 ± 0.7 vs naive, not significant |
 | E26 | Curiosity siting for turbines | KEPT | Mars +6.9 ± 2.5 / 300 games, but via fewer turbines, not learning |
-| E27 | Planning by imagination (switch strategy after imagining futures) | IN PROGRESS | oracle + true score: Mars +28.8 ± 4.7, perished 10 → 0; fair (no foresight): ≈ +7 ± 6 so far |
+| E27 | Planning by imagination (switch strategy after imagining futures) | NOTE (no ship) | oracle + true score: Mars +28.8 ± 4.7; fair (no foresight): +1.0 ± 3.4 over 200 games |
 
 ## Details and "don't retry unless"
 
@@ -76,8 +76,11 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | oracle, to year end, true episode score, K=30 | **+28.76 ± 4.68, thriving 34 → 60, perished 10 → 0** | the lever exists; picks mostly asIs with rare, well-timed switches |
 | fair, to year end, true score, R=2 | +6.89 ± 6.18 | ~+7, not significant at 60 games |
 | fair, to year end, true score, R=4 | +7.15 ± 5.89 | more imagined futures didn't help |
+| fair, to year end, true score, R=2, **200 games** (seeds 83000+) | **+1.02 ± 3.35**, thriving 125 → 139, perished 33 → 42 | the +7 at 60 games was noise; planning without foresight ≈ 0 net and gambles (more thriving, more deaths) |
 
-*Lessons:* (1) never trust a short-horizon hand-made value; it actively misled the oracle. (2) Of the oracle's +28.8, ≈ +21 is foresight (knowing which disaster strikes when) and ≈ +7 is planning. A better forecaster, not a better planner, is where most of the value is. (3) Cost: to-year-end rollouts are ~30 colony-years of compute per game.
+*Lessons:* (1) never trust a short-horizon hand-made value; it actively misled the oracle. (2) Of the oracle's +28.8, essentially all is foresight (knowing which disaster strikes when): planning with the true rules but an unknown future is worth ≈ +1 ± 3. A better forecaster, not a better planner, is where most of the value is. (3) Cost: to-year-end rollouts are ~30 colony-years of compute per game.
+
+*Don't retry* mean-objective strategy switching or distilling it (nothing to distill). Next: risk-averse objective (E28), since fair planning raised deaths.
 
 ## Open questions worth testing next
 

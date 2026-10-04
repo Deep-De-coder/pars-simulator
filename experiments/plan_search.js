@@ -26,7 +26,7 @@ function value(f, deathsBefore) {
   return ok * 4 + Math.min(14, f.alive.length) * 1.5 - (f.stats.deaths - deathsBefore) * 10 + Math.min(90, f.inv.food / pop) * 0.3 + (harvested / pop) * 0.5;
 }
 
-function playPlanned(opts, K, H, R, oracle = false) {
+function playPlanned(opts, K, H, R, oracle = false, objective = "mean") {
   const f = new F.Frontier(opts);
   const base = { ...f.brain };
   const picks = {};
@@ -35,14 +35,16 @@ function playPlanned(opts, K, H, R, oracle = false) {
     if (f.day % K === 0) {
       let best = null;
       for (const k of Object.keys(STRATEGIES)) {
-        let v = 0;
+        let v = 0; const vals = [];
         for (let r = 0; r < R; r++) {
           const c = f.imagine(opts.seed * 7919 + decision * 101 + r * 13 + 1, oracle);
           c.brain = withStrategy(base, k);
           const d0 = c.stats.deaths;
           if (H > 0) { for (let d = 0; d < H && c.running; d++) c.tick(); v += value(c, d0) / R; }
-          else { while (c.running) c.tick(); v += T.episodeScore(c) / R; } // H = 0: imagine to year end, true score
+          else { while (c.running) c.tick(); const sc = T.episodeScore(c); v += sc / R; vals.push(sc); } // H = 0: imagine to year end, true score
         }
+        // risk-averse: judge a strategy by the mean of its worst half of imagined futures (CVaR-50)
+        if (objective === "worst" && vals.length) { vals.sort((x, y) => x - y); const h = Math.max(1, Math.floor(vals.length / 2)); v = vals.slice(0, h).reduce((p, q) => p + q, 0) / h; }
         if (!best || v > best.v) best = { k, v };
       }
       f.brain = withStrategy(base, best.k);
@@ -55,15 +57,15 @@ function playPlanned(opts, K, H, R, oracle = false) {
 }
 
 if (!wt.isMainThread) {
-  const { K, H, R, oracle } = wt.workerData;
+  const { K, H, R, oracle, objective } = wt.workerData;
   wt.parentPort.on("message", ({ id, jobs }) => wt.parentPort.postMessage({ id, res: jobs.map((j) => {
-    if (j.planned) return playPlanned(j.opts, K, H, R, oracle);
+    if (j.planned) return playPlanned(j.opts, K, H, R, oracle, objective);
     const f = T.playYear(j.opts); return { s: T.episodeScore(f), o: f.outcome };
   }) }));
   return;
 }
-const [N = 20, BASE = 82000, SCS = "red_planet", K = 20, H = 45, R = 2, ORACLE = "0"] = process.argv.slice(2);
-const W = 4, ws = Array.from({ length: W }, () => new wt.Worker(__filename, { workerData: { K: +K, H: +H, R: +R, oracle: ORACLE === "1" } }));
+const [N = 20, BASE = 82000, SCS = "red_planet", K = 20, H = 45, R = 2, ORACLE = "0", OBJ = "mean"] = process.argv.slice(2);
+const W = 4, ws = Array.from({ length: W }, () => new wt.Worker(__filename, { workerData: { K: +K, H: +H, R: +R, oracle: ORACLE === "1", objective: OBJ } }));
 let nid = 0; const pend = new Map(); ws.forEach((w) => w.on("message", ({ id, res }) => { pend.get(id)(res); pend.delete(id); }));
 const run = async (jobs) => { const out = new Array(jobs.length); await Promise.all(ws.map((w, k) => new Promise((res) => { const idx = jobs.map((_, i) => i).filter((i) => i % W === k); const id = nid++; pend.set(id, (r) => { r.forEach((x, j) => { out[idx[j]] = x; }); res(); }); w.postMessage({ id, jobs: idx.map((i) => jobs[i]) }); }))); return out; };
 (async () => {
