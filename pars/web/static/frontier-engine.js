@@ -72,6 +72,7 @@
       uniform: (lo, hi) => lo + random() * (hi - lo),
       choice: (arr) => arr[Math.floor(random() * arr.length)],
       chance: (p) => random() < p,
+      state: () => a, setState: (v) => { a = v >>> 0; }, // for imagined copies
     };
   }
 
@@ -680,6 +681,29 @@
     coldTonight() { return this.weather.temp < 10; }
 
     // ------------------------------------------------------------ crops
+    // An imagined copy of the colony: same state, same beliefs, same rules of
+    // the world, but its own fresh randomness, so it knows how things work
+    // without knowing what the weather or disasters will actually do.
+    // oracle = true: the copy shares the real future (an upper bound for
+    // experiments only; a colony can't know what the weather will do)
+    imagine(seed, oracle = false) {
+      const seen = new Map();
+      const deep = (v) => {
+        if (v === null || typeof v !== "object") return v;
+        if (seen.has(v)) return seen.get(v);
+        if (v instanceof Map) { const m = new Map(); seen.set(v, m); for (const [k, x] of v) m.set(k, deep(x)); return m; }
+        if (v instanceof Set) { const m = new Set(); seen.set(v, m); for (const x of v) m.add(deep(x)); return m; }
+        const out = Array.isArray(v) ? [] : Object.create(Object.getPrototypeOf(v));
+        seen.set(v, out);
+        for (const k of Object.keys(v)) out[k] = k === "log" ? [] : deep(v[k]);
+        return out;
+      };
+      const c = deep(this);
+      c.R = makeRng(seed);
+      if (oracle) c.R.setState(this.R.state());
+      c.imagined = true;
+      return c;
+    }
     // ---- loop 1 / loop 2 plumbing
     harvestCtx(t, cropId, fert = t.fert, plantSeason = this.season) {
       return { cover: t.lights ? "lit" : t.greenhouse ? "glass" : "open", irrigated: t.irrigated ? "yes" : "no", plantSeason, soil: fert < 0.4 ? "poor" : fert < 0.7 ? "fair" : "rich", crop: cropId };
