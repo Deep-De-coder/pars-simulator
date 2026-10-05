@@ -39,7 +39,7 @@ Every idea tried on the Frontier agent, with what was measured and what was deci
 | E27 | Planning by imagination (switch strategy after imagining futures) | NOTE (no ship) | oracle + true score: Mars +28.8 ± 4.7; fair (no foresight): +1.0 ± 3.4 over 200 games |
 | E28 | Risk-averse (CVaR) planning | REVERTED (never shipped) | 200 games +6.2 ± 3.3, then fresh 200: +1.9 ± 3.0, deaths 23 → 31 |
 | E29 | Event-triggered planning (use the real 3-day forecast) | NOTE | 60 games +10.3 ± 5.5 |
-| E30 | Event-triggered + risk-averse | QUEUED | |
+| E30 | Event-triggered + risk-averse planning (year-end imagination) | NOTE (promising, not confirmed) | 100 Mars games: +10.7 ± 4.7 (risk-averse) vs +6.9 ± 4.7 (mean) on the same seeds; risk-aversion adds +3.8 ± 1.7 |
 | E31 | Loop 2 in generated worlds (sand 0.3×–1.7× grass) | NOTE (validates E23) | learned ratio tracks truth: corr 0.88 / 0.82; sand trips 10% → 79% as sand gets richer |
 | E32 | LLM proposes features, statistics verify | BLOCKED | no model API access inside the container |
 | E33 | Why loop 2 can't learn Mars turbine height | KEPT | shared daily wind; compare turbines **within a day** → height found 16/16 (was 1/16); outcomes Mars +4.1 ± 3.8, Ash +2.8 ± 2.2 |
@@ -99,7 +99,16 @@ Earth places (fair, to year end, R=2, 16 games each): River Rose −5.50 ± 4.50
 
 **E29 Event-triggered planning.** Re-plan when a disaster appears in the 3-day forecast or starts (imagined copies inherit that forecast, which is foresight the colony really has), plus a 60-day clock. Mars, 60 games, mean objective, R=2: +10.26 ± 5.51, thriving 34 → 48, perished 10 → 11 (the clock planner on the same seeds: +6.89). Promising but 60 games has misled before.
 
-**E30 Event-triggered + risk-averse (E28 + E29 merged).** R=4, CVaR-50, 200 fresh games (85000+). *Queued.*
+**E30 Event-triggered + risk-averse (E28 + E29 merged).** K=60 clock plus re-plan on a forecast/started disaster, imagine each of 5 strategies R=4 times to year end (H=0, true score), seeds 85000–85049 × 2 hazard levels = 100 Mars games per arm, run in 20-game chunks (the container is reclaimed when the session idles, which killed three longer runs). Both arms share the same plain baseline games.
+
+| Arm | planned − plain | chunks (20 games each) |
+|---|---|---|
+| event + risk-averse (CVaR-50) | **+10.73 ± 4.67** | +14.4, +7.3, +7.3, −1.4, +26.0 |
+| event + mean (E29 rerun) | **+6.91 ± 4.73** | +5.6, +7.0, +1.6, −5.5, +26.0 |
+| difference (paired by chunk) | +3.82 ± 1.67 | +8.9, +0.4, +5.8, +4.1, 0.0 |
+
+Read: the combination ranks above each part (E28 alone confirmed at +1.9, E29 alone +10.3 at 60 games, now +6.9 at 100), and risk-aversion adds a little on top of event triggering, which it didn't do on a clock (E28). One chunk (+26 in both arms) carries much of it. Not confirmed under the log's rules: needs 200 fresh games, and E28 showed a 2-SE planning result can vanish on fresh seeds. Cost: ~45 CPU-seconds per game (≈ 100× a plain game), so shipping it would need a much cheaper imagination (shorter rollouts, fewer strategies, or rollouts only on disaster events).
+
 
 **E31 Generated worlds.** `world: { sandForage: x }` overrides the hidden truth. `experiments/world_shift.js`: 40 worlds with x from 0.3 to 1.7 (seeds 86000+), normal disasters.
 
